@@ -11,14 +11,13 @@ import TournamentDetails from './pages/TournamentDetails';
 import Players from './pages/Players';
 import PlayerDetails from './pages/PlayerDetails';
 import Profile from './pages/Profile';
+import Auth from './pages/Auth';
 import { Toaster } from 'sonner';
 import { FirebaseProvider, useFirebase } from './components/FirebaseProvider';
 import { ErrorBoundary } from './components/ErrorBoundary';
-import { Button } from './components/ui/Button';
-import { LogIn } from 'lucide-react';
 
 function AppContent() {
-  const { user, login, loading } = useFirebase();
+  const { user, loading } = useFirebase();
 
   if (loading) {
     return (
@@ -30,18 +29,10 @@ function AppContent() {
 
   if (!user) {
     return (
-      <div className="min-h-screen flex flex-col items-center justify-center bg-background p-4">
-        <div className="max-w-md w-full text-center space-y-8">
-          <div className="space-y-2">
-            <h1 className="text-4xl font-bold tracking-tighter sm:text-5xl">CricManager</h1>
-            <p className="text-muted-foreground">Manage your cricket teams, players, and matches with ease.</p>
-          </div>
-          <Button onClick={login} size="lg" className="w-full gap-2">
-            <LogIn size={20} />
-            Sign in with Google
-          </Button>
-        </div>
-      </div>
+      <>
+        <Auth />
+        <Toaster position="top-center" richColors />
+      </>
     );
   }
 
