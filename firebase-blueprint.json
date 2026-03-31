@@ -1,0 +1,122 @@
+{
+  "entities": {
+    "Team": {
+      "title": "Team",
+      "description": "A cricket team",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "description": "Team name" },
+        "logo": { "type": "string", "description": "Team logo URL" },
+        "stats": {
+          "type": "object",
+          "properties": {
+            "played": { "type": "number" },
+            "won": { "type": "number" },
+            "lost": { "type": "number" },
+            "points": { "type": "number" }
+          }
+        },
+        "ownerId": { "type": "string", "description": "User ID of the team owner" }
+      },
+      "required": ["name", "ownerId"]
+    },
+    "Player": {
+      "title": "Player",
+      "description": "A cricket player",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "role": { "type": "string" },
+        "teamId": { "type": "string" },
+        "stats": {
+          "type": "object",
+          "properties": {
+            "matches": { "type": "number" },
+            "runs": { "type": "number" },
+            "wickets": { "type": "number" },
+            "average": { "type": "number" }
+          }
+        }
+      },
+      "required": ["name", "teamId"]
+    },
+    "Match": {
+      "title": "Match",
+      "description": "A cricket match",
+      "type": "object",
+      "properties": {
+        "team1Id": { "type": "string" },
+        "team2Id": { "type": "string" },
+        "team1Name": { "type": "string" },
+        "team2Name": { "type": "string" },
+        "date": { "type": "string", "format": "date-time" },
+        "venue": { "type": "string" },
+        "status": { "type": "string", "enum": ["scheduled", "ongoing", "completed"] },
+        "result": { "type": "string" },
+        "tournamentId": { "type": "string" },
+        "overs": { "type": "number" },
+        "matchType": { "type": "string" },
+        "score1": { "type": "number" },
+        "wickets1": { "type": "number" },
+        "balls1": { "type": "number" },
+        "score2": { "type": "number" },
+        "wickets2": { "type": "number" },
+        "balls2": { "type": "number" },
+        "currentInnings": { "type": "number" },
+        "recentBalls": { "type": "array", "items": { "type": "string" } }
+      },
+      "required": ["team1Id", "team2Id", "date", "status"]
+    },
+    "Tournament": {
+      "title": "Tournament",
+      "description": "A cricket tournament",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "startDate": { "type": "string", "format": "date" },
+        "endDate": { "type": "string", "format": "date" },
+        "status": { "type": "string", "enum": ["upcoming", "ongoing", "completed"] },
+        "teamIds": { "type": "array", "items": { "type": "string" } },
+        "ownerId": { "type": "string" }
+      },
+      "required": ["name", "startDate", "status", "ownerId"]
+    },
+    "User": {
+      "title": "User",
+      "description": "A user profile",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "email": { "type": "string", "format": "email" },
+        "photoUrl": { "type": "string", "format": "uri" },
+        "role": { "type": "string", "enum": ["admin", "user"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" },
+        "uid": { "type": "string" }
+      },
+      "required": ["email", "role"]
+    }
+  },
+  "firestore": {
+    "/teams/{teamId}": {
+      "schema": "Team",
+      "description": "Collection of cricket teams"
+    },
+    "/players/{playerId}": {
+      "schema": "Player",
+      "description": "Collection of cricket players"
+    },
+    "/matches/{matchId}": {
+      "schema": "Match",
+      "description": "Collection of cricket matches"
+    },
+    "/tournaments/{tournamentId}": {
+      "schema": "Tournament",
+      "description": "Collection of cricket tournaments"
+    },
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "Collection of user profiles"
+    }
+  }
+}

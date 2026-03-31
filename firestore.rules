@@ -1,0 +1,159 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: /teams/{teamId}
+    // Fields:
+    //   - name: string (required)
+    //   - logo: string (optional)
+    //   - stats: map (optional)
+    //   - ownerId: string (required, immutable)
+    //
+    // Collection: /teams/{teamId}/players/{playerId}
+    // Fields:
+    //   - name: string (required)
+    //   - role: string (optional)
+    //   - teamId: string (required, immutable)
+    //   - stats: map (optional)
+    //
+    // Collection: /matches/{matchId}
+    // Fields:
+    //   - team1Id: string (required)
+    //   - team2Id: string (required)
+    //   - team1Name: string (optional)
+    //   - team2Name: string (optional)
+    //   - date: string (required, format: date-time)
+    //   - venue: string (optional)
+    //   - status: string (required, enum: ['scheduled', 'ongoing', 'completed'])
+    //   - result: string (optional)
+    //   - score1: number (optional)
+    //   - wickets1: number (optional)
+    //   - balls1: number (optional)
+    //   - score2: number (optional)
+    //   - wickets2: number (optional)
+    //   - balls2: number (optional)
+    //
+    // Collection: /tournaments/{tournamentId}
+    // Fields:
+    //   - name: string (required)
+    //   - startDate: string (required)
+    //   - endDate: string (optional)
+    //   - status: string (required, enum: ['upcoming', 'ongoing', 'completed'])
+    //   - teamIds: list (optional)
+    //   - ownerId: string (required)
+    //
+    // ===============================================================
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() &&
+        (
+          (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+           get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin') ||
+          (request.auth.token.email == "bhovadsaurabh@gmail.com" && request.auth.token.email_verified == true)
+        );
+    }
+
+    function hasRequiredFields(fields) {
+      return request.resource.data.keys().hasAll(fields);
+    }
+
+    function hasOnlyAllowedFields(fields) {
+      return request.resource.data.keys().hasOnly(fields);
+    }
+
+    function areImmutableFieldsUnchanged(fields) {
+      return !request.resource.data.diff(resource.data).affectedKeys().hasAny(fields);
+    }
+
+    function isValidTeam(data) {
+      return hasRequiredFields(['name', 'ownerId']) &&
+             data.name is string && data.name.size() > 0 && data.name.size() < 100 &&
+             data.ownerId is string && data.ownerId.size() > 0;
+    }
+
+    function isValidPlayer(data) {
+      return hasRequiredFields(['name', 'teamId', 'ownerId']) &&
+             data.name is string && data.name.size() > 0 && data.name.size() < 100 &&
+             data.teamId is string && data.teamId.size() > 0 &&
+             data.ownerId is string && data.ownerId.size() > 0;
+    }
+
+    function isValidMatch(data) {
+      return hasRequiredFields(['team1Id', 'team2Id', 'date', 'status']) &&
+             data.team1Id is string && data.team2Id is string &&
+             data.date is string && data.status in ['scheduled', 'ongoing', 'completed'];
+    }
+
+    function isValidTournament(data) {
+      return hasRequiredFields(['name', 'startDate', 'status', 'ownerId']) &&
+             data.name is string && data.name.size() > 0 && data.name.size() < 100 &&
+             data.startDate is string && data.status in ['upcoming', 'ongoing', 'completed'] &&
+             data.ownerId is string;
+    }
+
+    function isValidUser(data) {
+      return hasOnlyAllowedFields(['name', 'displayName', 'email', 'photoUrl', 'photoURL', 'role', 'createdAt', 'updatedAt', 'uid']) &&
+             (!('name' in data) || (data.name is string && data.name.size() < 100)) &&
+             (!('displayName' in data) || (data.displayName is string && data.displayName.size() < 100)) &&
+             (!('email' in data) || (data.email is string && data.email.size() < 100)) &&
+             (!('photoUrl' in data) || (data.photoUrl is string && data.photoUrl.size() < 2000)) &&
+             (!('photoURL' in data) || (data.photoURL is string && data.photoURL.size() < 2000)) &&
+             (!('role' in data) || data.role in ['admin', 'user']);
+    }
+
+    // ===============================================================
+    // Rules
+    // ===============================================================
+
+    match /teams/{teamId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && isValidTeam(request.resource.data) && (request.resource.data.ownerId == request.auth.uid || isAdmin());
+      allow update: if isAuthenticated() && isValidTeam(request.resource.data) && (resource.data.ownerId == request.auth.uid || isAdmin()) && areImmutableFieldsUnchanged(['ownerId']);
+      allow delete: if isAdmin();
+    }
+
+    match /players/{playerId} {
+      allow get, list: if isAuthenticated();
+      allow create, update: if isAuthenticated() && isValidPlayer(request.resource.data) && (request.resource.data.ownerId == request.auth.uid || isAdmin());
+      allow delete: if isAdmin();
+    }
+
+    match /matches/{matchId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && isValidMatch(request.resource.data);
+      allow update: if isAuthenticated() && isValidMatch(request.resource.data);
+      allow delete: if isAdmin();
+    }
+
+    match /tournaments/{tournamentId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && isValidTournament(request.resource.data) && (request.resource.data.ownerId == request.auth.uid || isAdmin());
+      allow update: if isAuthenticated() && isValidTournament(request.resource.data) && (resource.data.ownerId == request.auth.uid || isAdmin()) && areImmutableFieldsUnchanged(['ownerId']);
+      allow delete: if isAdmin();
+    }
+
+    match /users/{userId} {
+      allow read: if isOwner(userId) || isAdmin();
+      allow create: if isOwner(userId) && isValidUser(request.resource.data) && 
+                    (!('role' in request.resource.data) || request.resource.data.role == 'user' || isAdmin());
+      allow update: if isOwner(userId) && isValidUser(request.resource.data) && 
+                    (areImmutableFieldsUnchanged(['role']) || isAdmin());
+    }
+  }
+}
