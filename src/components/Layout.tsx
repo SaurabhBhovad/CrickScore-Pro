@@ -1,6 +1,7 @@
 import React from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { Trophy, Users, User, LayoutDashboard, Settings, LogOut, Menu, X, ChevronRight, Activity, UserCircle } from 'lucide-react';
+import { CricketIcon } from './CricketIcon';
 import { Button } from './ui/Button';
 import { cn } from '@/src/lib/utils';
 import { useFirebase } from './FirebaseProvider';
@@ -50,7 +51,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
         <div className="p-8">
           <Link to="/" className="flex items-center gap-3 group">
             <div className="w-10 h-10 rounded-xl bg-primary flex items-center justify-center text-primary-foreground shadow-lg group-hover:scale-110 transition-transform">
-              <Trophy size={24} />
+              <CricketIcon size={24} />
             </div>
             <div>
               <h1 className="text-xl font-black tracking-tighter leading-none">CRICSCORE</h1>
@@ -111,7 +112,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
       <header className="md:hidden flex items-center justify-between p-4 border-b bg-card/80 backdrop-blur-md sticky top-0 z-40">
         <Link to="/" className="flex items-center gap-2">
           <div className="w-8 h-8 rounded-lg bg-primary flex items-center justify-center text-primary-foreground shadow-md">
-            <Trophy size={18} />
+            <CricketIcon size={18} />
           </div>
           <h1 className="text-lg font-black tracking-tighter">CRICSCORE</h1>
         </Link>
@@ -127,7 +128,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
             <div className="p-6 flex items-center justify-between border-b">
               <div className="flex items-center gap-2">
                 <div className="w-8 h-8 rounded-lg bg-primary flex items-center justify-center text-primary-foreground">
-                  <Trophy size={18} />
+                  <CricketIcon size={18} />
                 </div>
                 <h1 className="text-lg font-black tracking-tighter">CRICSCORE</h1>
               </div>

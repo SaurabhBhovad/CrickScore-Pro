@@ -4,6 +4,7 @@ import { Button } from '@/src/components/ui/Button';
 import { Input } from '@/src/components/ui/Input';
 import { Label } from '@/src/components/ui/Label';
 import { Trophy, Mail, Lock, User, ArrowRight } from 'lucide-react';
+import { CricketIcon } from '../components/CricketIcon';
 import { Link } from 'react-router-dom';
 import { useFirebase } from '../components/FirebaseProvider';
 import { toast } from 'sonner';
@@ -61,7 +62,7 @@ export default function Auth() {
           <div className="flex justify-center">
             <Link to="/" className="flex flex-col items-center gap-2 group">
               <div className="w-16 h-16 rounded-2xl bg-primary flex items-center justify-center text-primary-foreground shadow-xl group-hover:scale-110 transition-transform">
-                <Trophy size={32} />
+                <CricketIcon size={32} />
               </div>
               <div className="mt-2">
                 <h1 className="text-2xl font-black tracking-tighter leading-none">CRICSCORE</h1>
