@@ -1,11 +1,13 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
-import { auth, db, onAuthStateChanged, User, signInWithPopup, signInWithRedirect, getRedirectResult, googleProvider, signOut } from '../firebase';
+import { auth, db, onAuthStateChanged, User, signInWithPopup, signInWithRedirect, getRedirectResult, googleProvider, signOut, signInWithEmailAndPassword, createUserWithEmailAndPassword } from '../firebase';
 import { toast } from 'sonner';
 
 interface FirebaseContextType {
   user: User | null;
   loading: boolean;
   login: () => Promise<void>;
+  emailLogin: (email: string, pass: string) => Promise<void>;
+  emailSignUp: (email: string, pass: string, name: string) => Promise<void>;
   logout: () => Promise<void>;
 }
 
@@ -16,24 +18,38 @@ export const FirebaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    // Check for redirect result on mount
-    getRedirectResult(auth).then((result) => {
-      if (result?.user) {
-        toast.success('Successfully signed in!');
+    let isMounted = true;
+
+    const initAuth = async () => {
+      try {
+        // Wait for redirect result to settle before deciding on loading state
+        await getRedirectResult(auth);
+      } catch (error: any) {
+        console.error('Redirect sign-in error:', error);
+        if (error.code === 'auth/unauthorized-domain') {
+          toast.error('This domain is not authorized in Firebase. Please add this URL to the Authorized Domains list in Firebase Console.');
+        }
       }
-    }).catch((error) => {
-      console.error('Redirect sign-in error:', error);
-      if (error.code === 'auth/unauthorized-domain') {
-        toast.error('This domain is not authorized in Firebase. Please add this URL to the Authorized Domains list in Firebase Console.');
-      }
+
+      const unsubscribe = onAuthStateChanged(auth, (user) => {
+        if (isMounted) {
+          setUser(user);
+          setLoading(false);
+        }
+      });
+
+      return unsubscribe;
+    };
+
+    let unsubscribe: (() => void) | undefined;
+    initAuth().then(unsub => {
+      unsubscribe = unsub;
     });
 
-    const unsubscribe = onAuthStateChanged(auth, (user) => {
-      setUser(user);
-      setLoading(false);
-    });
-
-    return () => unsubscribe();
+    return () => {
+      isMounted = false;
+      if (unsubscribe) unsubscribe();
+    };
   }, []);
 
   const login = async () => {
@@ -68,16 +84,65 @@ export const FirebaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     }
   };
 
+  const emailLogin = async (email: string, pass: string) => {
+    try {
+      await signInWithEmailAndPassword(auth, email, pass);
+      toast.success('Successfully signed in!');
+    } catch (error: any) {
+      console.error('Email login error:', error);
+      if (error.code === 'auth/user-not-found' || error.code === 'auth/wrong-password' || error.code === 'auth/invalid-credential') {
+        toast.error('Invalid email or password.');
+      } else if (error.code === 'auth/too-many-requests') {
+        toast.error('Too many failed login attempts. Please try again later.');
+      } else {
+        toast.error('Failed to sign in. Please try again.');
+      }
+      throw error;
+    }
+  };
+
+  const emailSignUp = async (email: string, pass: string, name: string) => {
+    try {
+      const result = await createUserWithEmailAndPassword(auth, email, pass);
+      // Update profile with name
+      const { updateProfile } = await import('firebase/auth');
+      await updateProfile(result.user, { displayName: name });
+      
+      // Also save to Firestore
+      const { setDoc, doc, db } = await import('../firebase');
+      await setDoc(doc(db, 'users', result.user.uid), {
+        name,
+        email,
+        createdAt: new Date().toISOString(),
+        role: 'user'
+      });
+
+      toast.success('Account created successfully!');
+    } catch (error: any) {
+      console.error('Email sign up error:', error);
+      if (error.code === 'auth/email-already-in-use') {
+        toast.error('An account with this email already exists.');
+      } else if (error.code === 'auth/weak-password') {
+        toast.error('Password should be at least 6 characters.');
+      } else {
+        toast.error('Failed to create account. Please try again.');
+      }
+      throw error;
+    }
+  };
+
   const logout = async () => {
     try {
       await signOut(auth);
+      toast.success('Successfully signed out!');
     } catch (error) {
       console.error('Logout error:', error);
+      toast.error('Failed to sign out. Please try again.');
     }
   };
 
   return (
-    <FirebaseContext.Provider value={{ user, loading, login, logout }}>
+    <FirebaseContext.Provider value={{ user, loading, login, emailLogin, emailSignUp, logout }}>
       {!loading && children}
     </FirebaseContext.Provider>
   );

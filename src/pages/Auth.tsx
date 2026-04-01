@@ -10,8 +10,11 @@ import { toast } from 'sonner';
 
 export default function Auth() {
   const [isLogin, setIsLogin] = React.useState(true);
-  const { login } = useFirebase();
+  const { login, emailLogin, emailSignUp } = useFirebase();
   const [loading, setLoading] = React.useState(false);
+  const [email, setEmail] = React.useState('');
+  const [password, setPassword] = React.useState('');
+  const [name, setName] = React.useState('');
 
   const handleGoogleLogin = async () => {
     setLoading(true);
@@ -24,8 +27,25 @@ export default function Auth() {
     }
   };
 
-  const handleEmailAuth = () => {
-    toast.info('Email authentication is coming soon! Please use Google login for now.');
+  const handleEmailAuth = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!email || !password || (!isLogin && !name)) {
+      toast.error('Please fill in all fields.');
+      return;
+    }
+
+    setLoading(true);
+    try {
+      if (isLogin) {
+        await emailLogin(email, password);
+      } else {
+        await emailSignUp(email, password, name);
+      }
+    } catch (error) {
+      console.error('Email auth error:', error);
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -60,45 +80,76 @@ export default function Auth() {
             </CardDescription>
           </div>
         </CardHeader>
-        <CardContent className="space-y-4">
-          {!isLogin && (
+        <form onSubmit={handleEmailAuth}>
+          <CardContent className="space-y-4">
+            {!isLogin && (
+              <div className="space-y-2">
+                <Label htmlFor="name">Full Name</Label>
+                <div className="relative">
+                  <User className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" size={18} />
+                  <Input 
+                    id="name" 
+                    placeholder="John Doe" 
+                    className="pl-10 h-12 rounded-xl bg-muted/20 border-muted"
+                    value={name}
+                    onChange={(e) => setName(e.target.value)}
+                    required={!isLogin}
+                  />
+                </div>
+              </div>
+            )}
             <div className="space-y-2">
-              <Label htmlFor="name">Full Name</Label>
+              <Label htmlFor="email">Email Address</Label>
               <div className="relative">
-                <User className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" size={18} />
-                <Input id="name" placeholder="John Doe" className="pl-10 h-12 rounded-xl bg-muted/20 border-muted" />
+                <Mail className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" size={18} />
+                <Input 
+                  id="email" 
+                  type="email" 
+                  placeholder="john@example.com" 
+                  className="pl-10 h-12 rounded-xl bg-muted/20 border-muted"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  required
+                />
               </div>
             </div>
-          )}
-          <div className="space-y-2">
-            <Label htmlFor="email">Email Address</Label>
-            <div className="relative">
-              <Mail className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" size={18} />
-              <Input id="email" type="email" placeholder="john@example.com" className="pl-10 h-12 rounded-xl bg-muted/20 border-muted" />
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <Label htmlFor="password">Password</Label>
+                {isLogin && (
+                  <button type="button" className="text-xs font-semibold text-primary hover:underline">
+                    Forgot password?
+                  </button>
+                )}
+              </div>
+              <div className="relative">
+                <Lock className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" size={18} />
+                <Input 
+                  id="password" 
+                  type="password" 
+                  className="pl-10 h-12 rounded-xl bg-muted/20 border-muted"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  required
+                />
+              </div>
             </div>
-          </div>
-          <div className="space-y-2">
-            <div className="flex items-center justify-between">
-              <Label htmlFor="password">Password</Label>
-              {isLogin && (
-                <button className="text-xs font-semibold text-primary hover:underline">
-                  Forgot password?
-                </button>
+            <Button 
+              type="submit"
+              disabled={loading}
+              className="w-full h-12 rounded-xl mt-4 font-bold text-base shadow-lg shadow-primary/20 group"
+            >
+              {loading ? (
+                <div className="animate-spin rounded-full h-5 w-5 border-t-2 border-b-2 border-white"></div>
+              ) : (
+                <>
+                  {isLogin ? 'Sign In' : 'Create Account'}
+                  <ArrowRight size={18} className="ml-2 group-hover:translate-x-1 transition-transform" />
+                </>
               )}
-            </div>
-            <div className="relative">
-              <Lock className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" size={18} />
-              <Input id="password" type="password" className="pl-10 h-12 rounded-xl bg-muted/20 border-muted" />
-            </div>
-          </div>
-          <Button 
-            onClick={handleEmailAuth}
-            className="w-full h-12 rounded-xl mt-4 font-bold text-base shadow-lg shadow-primary/20 group"
-          >
-            {isLogin ? 'Sign In' : 'Create Account'}
-            <ArrowRight size={18} className="ml-2 group-hover:translate-x-1 transition-transform" />
-          </Button>
-        </CardContent>
+            </Button>
+          </CardContent>
+        </form>
         <CardFooter className="flex flex-col space-y-6 pt-2 pb-8">
           <div className="relative w-full">
             <div className="absolute inset-0 flex items-center">
