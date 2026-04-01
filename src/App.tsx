@@ -15,6 +15,7 @@ import Auth from './pages/Auth';
 import { Toaster } from 'sonner';
 import { FirebaseProvider, useFirebase } from './components/FirebaseProvider';
 import { ErrorBoundary } from './components/ErrorBoundary';
+import { ChatBot } from './components/ChatBot';
 
 function AppContent() {
   const { user, loading } = useFirebase();
@@ -37,24 +38,23 @@ function AppContent() {
   }
 
   return (
-    <Router>
-      <Layout>
-        <Routes>
-          <Route path="/" element={<Dashboard />} />
-          <Route path="/matches" element={<Matches />} />
-          <Route path="/matches/new" element={<MatchScoring />} />
-          <Route path="/matches/:id" element={<MatchScoring />} />
-          <Route path="/teams" element={<Teams />} />
-          <Route path="/teams/:id" element={<TeamDetails />} />
-          <Route path="/tournaments" element={<Tournaments />} />
-          <Route path="/tournaments/:id" element={<TournamentDetails />} />
-          <Route path="/players" element={<Players />} />
-          <Route path="/players/:id" element={<PlayerDetails />} />
-          <Route path="/profile" element={<Profile />} />
-        </Routes>
-      </Layout>
+    <Layout>
+      <Routes>
+        <Route path="/" element={<Dashboard />} />
+        <Route path="/matches" element={<Matches />} />
+        <Route path="/matches/new" element={<MatchScoring />} />
+        <Route path="/matches/:id" element={<MatchScoring />} />
+        <Route path="/teams" element={<Teams />} />
+        <Route path="/teams/:id" element={<TeamDetails />} />
+        <Route path="/tournaments" element={<Tournaments />} />
+        <Route path="/tournaments/:id" element={<TournamentDetails />} />
+        <Route path="/players" element={<Players />} />
+        <Route path="/players/:id" element={<PlayerDetails />} />
+        <Route path="/profile" element={<Profile />} />
+      </Routes>
+      <ChatBot />
       <Toaster position="top-center" richColors />
-    </Router>
+    </Layout>
   );
 }
 
@@ -62,7 +62,9 @@ export default function App() {
   return (
     <ErrorBoundary>
       <FirebaseProvider>
-        <AppContent />
+        <Router>
+          <AppContent />
+        </Router>
       </FirebaseProvider>
     </ErrorBoundary>
   );

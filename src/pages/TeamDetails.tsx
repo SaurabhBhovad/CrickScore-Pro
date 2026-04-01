@@ -4,17 +4,20 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/src
 import { Button } from '@/src/components/ui/Button';
 import { Badge } from '@/src/components/ui/Badge';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/src/components/ui/Tabs';
-import { Users, Activity, ChevronRight, Loader2, Plus, MapPin, Clock, Calendar, User, Trophy } from 'lucide-react';
-import { db, doc, onSnapshot, collection, query, where, handleFirestoreError, OperationType } from '../firebase';
+import { Users, Activity, ChevronRight, Loader2, Plus, MapPin, Clock, Calendar, User, Trophy, Trash2 } from 'lucide-react';
+import { db, doc, onSnapshot, collection, query, where, handleFirestoreError, OperationType, deleteDoc, getDocs, writeBatch } from '../firebase';
 import { toast } from 'sonner';
 import { format } from 'date-fns';
 import { cn } from '@/src/lib/utils';
+import { useFirebase } from '../components/FirebaseProvider';
+import { Dialog } from '@/src/components/ui/Dialog';
 
 interface Team {
   id: string;
   name: string;
   logo?: string;
   description?: string;
+  ownerId: string;
 }
 
 interface Player {
@@ -23,6 +26,12 @@ interface Player {
   role: string;
   battingStyle: string;
   bowlingStyle: string;
+  photo?: string;
+  stats?: {
+    matches: number;
+    runs: number;
+    wickets: number;
+  };
 }
 
 interface Match {
@@ -44,10 +53,14 @@ interface Match {
 export default function TeamDetails() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const { user } = useFirebase();
   const [team, setTeam] = useState<Team | null>(null);
   const [players, setPlayers] = useState<Player[]>([]);
   const [matches, setMatches] = useState<Match[]>([]);
   const [loading, setLoading] = useState(true);
+  const [activeTab, setActiveTab] = useState('players');
+  const [isDeletingTeam, setIsDeletingTeam] = useState(false);
+  const [playerToDelete, setPlayerToDelete] = useState<Player | null>(null);
 
   useEffect(() => {
     if (!id) return;
@@ -56,12 +69,15 @@ export default function TeamDetails() {
     const unsubscribeTeam = onSnapshot(teamRef, (snapshot) => {
       if (snapshot.exists()) {
         setTeam({ id: snapshot.id, ...snapshot.data() } as Team);
+        setLoading(false);
       } else {
         toast.error('Team not found');
         navigate('/teams');
+        setLoading(false);
       }
     }, (error) => {
       handleFirestoreError(error, OperationType.GET, `teams/${id}`);
+      setLoading(false);
     });
 
     const playersQuery = query(collection(db, 'players'), where('teamId', '==', id));
@@ -91,7 +107,6 @@ export default function TeamDetails() {
       });
     });
 
-    setLoading(false);
     return () => {
       unsubscribeTeam();
       unsubscribePlayers();
@@ -99,6 +114,44 @@ export default function TeamDetails() {
       unsubscribeMatches2();
     };
   }, [id, navigate]);
+
+  const handleDeleteTeam = async () => {
+    if (!id || !user || user.uid !== team?.ownerId) return;
+    
+    try {
+      // 1. Delete all players associated with this team
+      const playersQuery = query(collection(db, 'players'), where('teamId', '==', id));
+      const playersSnapshot = await getDocs(playersQuery);
+      
+      const batch = writeBatch(db);
+      playersSnapshot.docs.forEach((doc) => {
+        batch.delete(doc.ref);
+      });
+      
+      // 2. Delete the team document
+      batch.delete(doc(db, 'teams', id));
+      
+      await batch.commit();
+      toast.success('Team and its players deleted successfully');
+      navigate('/teams');
+    } catch (error: any) {
+      console.error('Error deleting team:', error);
+      toast.error('Failed to delete team');
+    }
+  };
+
+  const handleDeletePlayer = async (playerId: string) => {
+    if (!user || user.uid !== team?.ownerId) return;
+    
+    try {
+      await deleteDoc(doc(db, 'players', playerId));
+      toast.success('Player deleted successfully');
+      setPlayerToDelete(null);
+    } catch (error: any) {
+      console.error('Error deleting player:', error);
+      toast.error('Failed to delete player');
+    }
+  };
 
   if (loading || !team) {
     return (
@@ -115,8 +168,12 @@ export default function TeamDetails() {
         <div className="absolute top-0 right-0 w-64 h-64 bg-primary/5 rounded-full -mr-32 -mt-32 blur-3xl pointer-events-none" />
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-6 relative z-10">
           <div className="flex items-center gap-6">
-            <div className="w-20 h-20 rounded-3xl bg-primary/10 flex items-center justify-center text-primary border border-primary/20 shadow-inner font-black text-3xl">
-              {team.name.charAt(0)}
+            <div className="w-20 h-20 rounded-3xl bg-primary/10 flex items-center justify-center text-primary border border-primary/20 shadow-inner font-black text-3xl overflow-hidden">
+              {team.logo ? (
+                <img src={team.logo} alt={team.name} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+              ) : (
+                team.name.charAt(0)
+              )}
             </div>
             <div>
               <h1 className="text-4xl font-black tracking-tighter mb-2">{team.name}</h1>
@@ -128,6 +185,16 @@ export default function TeamDetails() {
             </div>
           </div>
           <div className="flex items-center gap-3">
+            {user?.uid === team.ownerId && (
+              <Button 
+                variant="outline" 
+                size="icon" 
+                className="rounded-2xl h-12 w-12 text-destructive border-destructive/20 hover:bg-destructive/10 hover:text-destructive"
+                onClick={() => setIsDeletingTeam(true)}
+              >
+                <Trash2 size={20} />
+              </Button>
+            )}
             <Button asChild className="rounded-2xl h-12 px-6 font-bold shadow-lg shadow-primary/20">
               <Link to="/players">
                 <Plus size={20} className="mr-2" /> Add Player
@@ -137,7 +204,7 @@ export default function TeamDetails() {
         </div>
       </div>
 
-      <Tabs defaultValue="players" className="space-y-8">
+      <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-8">
         <TabsList className="bg-muted/30 p-1.5 rounded-2xl border border-muted/60 inline-flex">
           <TabsTrigger value="players" className="rounded-xl px-8 py-2.5 font-black uppercase tracking-widest text-[10px] data-[state=active]:bg-background data-[state=active]:shadow-sm">Players</TabsTrigger>
           <TabsTrigger value="matches" className="rounded-xl px-8 py-2.5 font-black uppercase tracking-widest text-[10px] data-[state=active]:bg-background data-[state=active]:shadow-sm">Matches</TabsTrigger>
@@ -156,13 +223,39 @@ export default function TeamDetails() {
                 <Link key={player.id} to={`/players/${player.id}`}>
                   <Card className="rounded-3xl border-muted/60 hover:border-primary/40 hover:shadow-lg transition-all group overflow-hidden">
                     <CardContent className="p-6 flex items-center gap-4">
-                      <div className="w-14 h-14 rounded-2xl bg-muted/30 flex items-center justify-center font-black text-lg group-hover:bg-primary/10 group-hover:text-primary transition-colors">
-                        {player.name.charAt(0)}
+                      <div className="w-14 h-14 rounded-2xl bg-muted/30 flex items-center justify-center font-black text-lg group-hover:bg-primary/10 group-hover:text-primary transition-colors overflow-hidden">
+                        {player.photo ? (
+                          <img src={player.photo} alt={player.name} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                        ) : (
+                          player.name.charAt(0)
+                        )}
                       </div>
                       <div className="flex-1">
                         <div className="font-black text-lg tracking-tight">{player.name}</div>
-                        <div className="text-xs font-bold text-muted-foreground uppercase tracking-widest">{player.role}</div>
+                        <div className="flex items-center gap-2">
+                          <div className="text-xs font-bold text-muted-foreground uppercase tracking-widest">{player.role}</div>
+                          <span className="w-1 h-1 rounded-full bg-muted-foreground/30" />
+                          <div className="text-[10px] font-black text-primary uppercase tracking-widest">
+                            {player.stats?.matches || 0} Matches
+                          </div>
+                        </div>
                       </div>
+                      
+                      {user?.uid === team.ownerId && (
+                        <Button 
+                          variant="ghost" 
+                          size="icon" 
+                          className="h-8 w-8 text-muted-foreground hover:text-destructive hover:bg-destructive/10 rounded-full"
+                          onClick={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            setPlayerToDelete(player);
+                          }}
+                        >
+                          <Trash2 size={14} />
+                        </Button>
+                      )}
+                      
                       <ChevronRight size={16} className="text-muted-foreground group-hover:text-primary transition-colors" />
                     </CardContent>
                   </Card>
@@ -240,6 +333,34 @@ export default function TeamDetails() {
           </div>
         </TabsContent>
       </Tabs>
+
+      <Dialog
+        isOpen={isDeletingTeam}
+        onClose={() => setIsDeletingTeam(false)}
+        title="Delete Team?"
+        description={`This will permanently delete "${team.name}" and all its players. This action cannot be undone.`}
+      >
+        <div className="flex justify-end gap-3 pt-4">
+          <Button variant="outline" onClick={() => setIsDeletingTeam(false)}>Cancel</Button>
+          <Button variant="destructive" onClick={handleDeleteTeam}>
+            Delete Team
+          </Button>
+        </div>
+      </Dialog>
+
+      <Dialog
+        isOpen={!!playerToDelete}
+        onClose={() => setPlayerToDelete(null)}
+        title="Delete Player?"
+        description={`Are you sure you want to delete ${playerToDelete?.name}? This action cannot be undone.`}
+      >
+        <div className="flex justify-end gap-3 pt-4">
+          <Button variant="outline" onClick={() => setPlayerToDelete(null)}>Cancel</Button>
+          <Button variant="destructive" onClick={() => playerToDelete && handleDeletePlayer(playerToDelete.id)}>
+            Delete Player
+          </Button>
+        </div>
+      </Dialog>
     </div>
   );
 }

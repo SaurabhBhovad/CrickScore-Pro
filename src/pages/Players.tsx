@@ -6,10 +6,11 @@ import { Label } from '@/src/components/ui/Label';
 import { Input } from '@/src/components/ui/Input';
 import { Select } from '@/src/components/ui/Select';
 import { Badge } from '@/src/components/ui/Badge';
-import { User, Plus, Search, Filter, TrendingUp, Award, Activity, Loader2 } from 'lucide-react';
+import { User, Plus, Search, Filter, TrendingUp, Award, Activity, Loader2, Trash2 } from 'lucide-react';
 import { Link } from 'react-router-dom';
-import { db, collection, onSnapshot, query, where, handleFirestoreError, OperationType } from '../firebase';
+import { db, collection, onSnapshot, query, where, handleFirestoreError, OperationType, deleteDoc, doc } from '../firebase';
 import { useFirebase } from '../components/FirebaseProvider';
+import { toast } from 'sonner';
 
 interface Player {
   id: string;
@@ -37,6 +38,7 @@ export default function Players() {
   const [userTeamIds, setUserTeamIds] = useState<string[]>([]);
   const [teams, setTeams] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
+  const [playerToDelete, setPlayerToDelete] = useState<Player | null>(null);
 
   useEffect(() => {
     if (!user) return;
@@ -82,6 +84,18 @@ export default function Players() {
       player.role.toLowerCase().includes(searchQuery.toLowerCase())
     )
   );
+
+  const handleDeletePlayer = async (playerId: string) => {
+    if (!user) return;
+    try {
+      await deleteDoc(doc(db, 'players', playerId));
+      toast.success('Player deleted successfully');
+      setPlayerToDelete(null);
+    } catch (error) {
+      console.error('Error deleting player:', error);
+      toast.error('Failed to delete player');
+    }
+  };
 
   return (
     <div className="space-y-8">
@@ -129,8 +143,24 @@ export default function Players() {
       ) : (
         <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
           {filteredPlayers.map((player) => (
-            <Card key={player.id} className="group hover:shadow-xl transition-all duration-300 border-muted/60 overflow-hidden">
+            <Card key={player.id} className="group hover:shadow-xl transition-all duration-300 border-muted/60 overflow-hidden relative">
               <div className="h-2 bg-primary/10 group-hover:bg-primary transition-colors" />
+              {user?.uid === player.ownerId && (
+                <div className="absolute top-4 right-4 z-10 opacity-0 group-hover:opacity-100 transition-opacity">
+                  <Button 
+                    variant="destructive" 
+                    size="icon" 
+                    className="h-8 w-8 rounded-full shadow-lg"
+                    onClick={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      setPlayerToDelete(player);
+                    }}
+                  >
+                    <Trash2 size={14} />
+                  </Button>
+                </div>
+              )}
               <CardHeader className="pb-2 text-center">
                 <div className="relative inline-block mx-auto mb-4">
                   <div className="w-20 h-20 rounded-full bg-secondary flex items-center justify-center text-secondary-foreground font-bold text-2xl border-4 border-background shadow-md overflow-hidden">
@@ -182,6 +212,20 @@ export default function Players() {
           ))}
         </div>
       )}
+
+      <Dialog
+        isOpen={!!playerToDelete}
+        onClose={() => setPlayerToDelete(null)}
+        title="Delete Player?"
+        description={`This will permanently delete "${playerToDelete?.name}". This action cannot be undone.`}
+      >
+        <div className="flex justify-end gap-3 pt-4">
+          <Button variant="outline" onClick={() => setPlayerToDelete(null)}>Cancel</Button>
+          <Button variant="destructive" onClick={() => playerToDelete && handleDeletePlayer(playerToDelete.id)}>
+            Delete Player
+          </Button>
+        </div>
+      </Dialog>
     </div>
   );
 }

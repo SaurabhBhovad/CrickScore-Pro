@@ -15,9 +15,9 @@ export function Dialog({ isOpen, onClose, title, description, children }: Dialog
   if (!isOpen) return null
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-background/80 backdrop-blur-sm">
-      <div className="w-full max-w-lg bg-card border rounded-xl shadow-lg animate-in fade-in zoom-in duration-200">
-        <div className="flex items-center justify-between p-6 border-b">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-background/80 backdrop-blur-sm overflow-y-auto">
+      <div className="w-full max-w-lg bg-card border rounded-xl shadow-lg animate-in fade-in zoom-in duration-200 my-auto">
+        <div className="sticky top-0 z-10 flex items-center justify-between p-6 border-b bg-card rounded-t-xl">
           <div className="space-y-1">
             <h2 className="text-xl font-bold leading-none tracking-tight">{title}</h2>
             {description && <p className="text-sm text-muted-foreground">{description}</p>}

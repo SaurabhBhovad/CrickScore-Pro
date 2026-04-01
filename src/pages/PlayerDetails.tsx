@@ -4,8 +4,10 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/src
 import { Button } from '@/src/components/ui/Button';
 import { Badge } from '@/src/components/ui/Badge';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/src/components/ui/Tabs';
-import { User, Activity, ChevronRight, Loader2, Plus, MapPin, Clock, Calendar, Trophy, Zap, Target } from 'lucide-react';
-import { db, doc, onSnapshot, handleFirestoreError, OperationType } from '../firebase';
+import { Dialog } from '@/src/components/ui/Dialog';
+import { User, Activity, ChevronRight, Loader2, Plus, MapPin, Clock, Calendar, Trophy, Zap, Target, Trash2 } from 'lucide-react';
+import { db, doc, onSnapshot, handleFirestoreError, OperationType, deleteDoc } from '../firebase';
+import { useFirebase } from '../components/FirebaseProvider';
 import { toast } from 'sonner';
 import { cn } from '@/src/lib/utils';
 
@@ -16,6 +18,7 @@ interface Player {
   battingStyle: string;
   bowlingStyle: string;
   teamId: string;
+  ownerId?: string;
   teamName?: string;
   photo?: string;
   stats?: {
@@ -33,8 +36,10 @@ interface Player {
 export default function PlayerDetails() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const { user } = useFirebase();
   const [player, setPlayer] = useState<Player | null>(null);
   const [loading, setLoading] = useState(true);
+  const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
 
   useEffect(() => {
     if (!id) return;
@@ -55,6 +60,18 @@ export default function PlayerDetails() {
 
     return () => unsubscribe();
   }, [id, navigate]);
+
+  const handleDeletePlayer = async () => {
+    if (!id || !user) return;
+    try {
+      await deleteDoc(doc(db, 'players', id));
+      toast.success('Player deleted successfully');
+      navigate('/players');
+    } catch (error) {
+      console.error('Error deleting player:', error);
+      toast.error('Failed to delete player');
+    }
+  };
 
   if (loading || !player) {
     return (
@@ -97,12 +114,31 @@ export default function PlayerDetails() {
             </div>
           </div>
           <div className="flex items-center gap-3">
+            {user?.uid === player.ownerId && (
+              <Button variant="destructive" size="icon" className="rounded-2xl h-12 w-12" onClick={() => setIsDeleteDialogOpen(true)}>
+                <Trash2 size={20} />
+              </Button>
+            )}
             <Button variant="outline" className="rounded-2xl h-12 px-6 font-bold">
               Edit Profile
             </Button>
           </div>
         </div>
       </div>
+
+      <Dialog
+        isOpen={isDeleteDialogOpen}
+        onClose={() => setIsDeleteDialogOpen(false)}
+        title="Delete Player?"
+        description={`This will permanently delete "${player.name}". This action cannot be undone.`}
+      >
+        <div className="flex justify-end gap-3 pt-4">
+          <Button variant="outline" onClick={() => setIsDeleteDialogOpen(false)}>Cancel</Button>
+          <Button variant="destructive" onClick={handleDeletePlayer}>
+            Delete Player
+          </Button>
+        </div>
+      </Dialog>
 
       {/* Stats Grid */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-6">

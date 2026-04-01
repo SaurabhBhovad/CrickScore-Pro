@@ -76,7 +76,7 @@ export default function Profile() {
       await setDoc(doc(db, 'users', user.uid), {
         name: editName,
         photoUrl: editPhoto,
-        email: user.email
+        email: user.email || ''
       }, { merge: true });
       toast.success('Profile updated successfully');
     } catch (error) {

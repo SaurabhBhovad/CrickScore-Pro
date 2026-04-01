@@ -84,20 +84,28 @@ service cloud.firestore {
     function isValidTeam(data) {
       return hasRequiredFields(['name', 'ownerId']) &&
              data.name is string && data.name.size() > 0 && data.name.size() < 100 &&
-             data.ownerId is string && data.ownerId.size() > 0;
+             data.ownerId is string && data.ownerId.size() > 0 &&
+             (!('logo' in data) || (data.logo is string && data.logo.size() < 2000000)); // Allow base64 logos up to 2MB
     }
 
     function isValidPlayer(data) {
       return hasRequiredFields(['name', 'teamId', 'ownerId']) &&
              data.name is string && data.name.size() > 0 && data.name.size() < 100 &&
              data.teamId is string && data.teamId.size() > 0 &&
-             data.ownerId is string && data.ownerId.size() > 0;
+             data.ownerId is string && data.ownerId.size() > 0 &&
+             (!('photo' in data) || (data.photo is string && data.photo.size() < 2000000));
     }
 
     function isValidMatch(data) {
       return hasRequiredFields(['team1Id', 'team2Id', 'date', 'status']) &&
              data.team1Id is string && data.team2Id is string &&
-             data.date is string && data.status in ['scheduled', 'ongoing', 'completed'];
+             data.date is string && data.status in ['scheduled', 'ongoing', 'completed'] &&
+             (!('score1' in data) || data.score1 is number) &&
+             (!('score2' in data) || data.score2 is number) &&
+             (!('wickets1' in data) || data.wickets1 is number) &&
+             (!('wickets2' in data) || data.wickets2 is number) &&
+             (!('balls1' in data) || data.balls1 is number) &&
+             (!('balls2' in data) || data.balls2 is number);
     }
 
     function isValidTournament(data) {
@@ -125,27 +133,27 @@ service cloud.firestore {
       allow read: if isAuthenticated();
       allow create: if isAuthenticated() && isValidTeam(request.resource.data) && (request.resource.data.ownerId == request.auth.uid || isAdmin());
       allow update: if isAuthenticated() && isValidTeam(request.resource.data) && (resource.data.ownerId == request.auth.uid || isAdmin()) && areImmutableFieldsUnchanged(['ownerId']);
-      allow delete: if isAdmin();
+      allow delete: if isAuthenticated() && (resource.data.ownerId == request.auth.uid || isAdmin());
     }
 
     match /players/{playerId} {
       allow get, list: if isAuthenticated();
       allow create, update: if isAuthenticated() && isValidPlayer(request.resource.data) && (request.resource.data.ownerId == request.auth.uid || isAdmin());
-      allow delete: if isAdmin();
+      allow delete: if isAuthenticated() && (resource.data.ownerId == request.auth.uid || isAdmin());
     }
 
     match /matches/{matchId} {
       allow read: if isAuthenticated();
       allow create: if isAuthenticated() && isValidMatch(request.resource.data);
       allow update: if isAuthenticated() && isValidMatch(request.resource.data);
-      allow delete: if isAdmin();
+      allow delete: if isAuthenticated() && (resource.data.ownerId == request.auth.uid || isAdmin());
     }
 
     match /tournaments/{tournamentId} {
       allow read: if isAuthenticated();
       allow create: if isAuthenticated() && isValidTournament(request.resource.data) && (request.resource.data.ownerId == request.auth.uid || isAdmin());
       allow update: if isAuthenticated() && isValidTournament(request.resource.data) && (resource.data.ownerId == request.auth.uid || isAdmin()) && areImmutableFieldsUnchanged(['ownerId']);
-      allow delete: if isAdmin();
+      allow delete: if isAuthenticated() && (resource.data.ownerId == request.auth.uid || isAdmin());
     }
 
     match /users/{userId} {

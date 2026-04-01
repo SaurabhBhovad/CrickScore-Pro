@@ -6,9 +6,10 @@ import { Badge } from '@/src/components/ui/Badge';
 import { Dialog } from '@/src/components/ui/Dialog';
 import { Label } from '@/src/components/ui/Label';
 import { Input } from '@/src/components/ui/Input';
-import { Trophy, Undo, History, Settings, User, Activity, Info, ChevronRight, Share2, MoreVertical, Zap, Target, Loader2 } from 'lucide-react';
+import { Select } from '@/src/components/ui/Select';
+import { Trophy, Undo, History, Settings, User, Activity, Info, ChevronRight, Share2, MoreVertical, Zap, Target, Loader2, PlusCircle } from 'lucide-react';
 import { cn } from '@/src/lib/utils';
-import { db, doc, onSnapshot, updateDoc, handleFirestoreError, OperationType, collection, query, where } from '../firebase';
+import { db, doc, onSnapshot, updateDoc, handleFirestoreError, OperationType, collection, query, where, increment, writeBatch, setDoc } from '../firebase';
 import { toast } from 'sonner';
 
 interface Match {
@@ -49,6 +50,7 @@ interface Match {
       ballsBowled: number;
     }
   };
+  statsUpdated?: boolean;
 }
 
 interface Player {
@@ -66,6 +68,73 @@ export default function MatchScoring() {
   const [loading, setLoading] = useState(true);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isUpdating, setIsUpdating] = useState(false);
+  const [isDetailedBallOpen, setIsDetailedBallOpen] = useState(false);
+  const [detailedBallData, setDetailedBallData] = useState({
+    runs: 0,
+    extraType: 'none' as 'none' | 'wide' | 'noball' | 'bye' | 'legbye',
+    extraRuns: 0,
+    isWicket: false,
+    wicketType: 'bowled',
+    strikerId: '',
+    nonStrikerId: '',
+    bowlerId: ''
+  });
+
+  useEffect(() => {
+    if (match) {
+      setDetailedBallData(prev => ({
+        ...prev,
+        strikerId: match.strikerId || '',
+        nonStrikerId: match.nonStrikerId || '',
+        bowlerId: match.bowlerId || ''
+      }));
+    }
+  }, [match?.strikerId, match?.nonStrikerId, match?.bowlerId]);
+
+  const handleDetailedBallSubmit = async () => {
+    if (!match || !id) return;
+    
+    // Calculate total runs for the ball
+    // For Wide/No Ball, penalty is 1 + extraRuns
+    // For Bye/Leg Bye, total runs is extraRuns (runs off bat is 0)
+    let totalRuns = 0;
+    if (detailedBallData.extraType === 'wide' || detailedBallData.extraType === 'noball') {
+      totalRuns = 1 + detailedBallData.extraRuns;
+    } else if (detailedBallData.extraType === 'bye' || detailedBallData.extraType === 'legbye') {
+      totalRuns = detailedBallData.extraRuns;
+    } else {
+      totalRuns = detailedBallData.runs;
+    }
+
+    // Update striker/bowler if they were changed in the dialog
+    if (detailedBallData.strikerId !== match.strikerId || 
+        detailedBallData.nonStrikerId !== match.nonStrikerId || 
+        detailedBallData.bowlerId !== match.bowlerId) {
+      
+      const matchRef = doc(db, 'matches', id);
+      const striker = battingPlayers.find(p => p.id === detailedBallData.strikerId);
+      const nonStriker = battingPlayers.find(p => p.id === detailedBallData.nonStrikerId);
+      const bowler = bowlingPlayers.find(p => p.id === detailedBallData.bowlerId);
+      
+      await updateDoc(matchRef, JSON.parse(JSON.stringify({
+        strikerId: detailedBallData.strikerId,
+        strikerName: striker?.name || match.strikerName,
+        nonStrikerId: detailedBallData.nonStrikerId,
+        nonStrikerName: nonStriker?.name || match.nonStrikerName,
+        bowlerId: detailedBallData.bowlerId,
+        bowlerName: bowler?.name || match.bowlerName
+      })));
+    }
+
+    await updateScore(
+      totalRuns, 
+      detailedBallData.isWicket, 
+      detailedBallData.extraType, 
+      detailedBallData.isWicket ? detailedBallData.wicketType : 'none'
+    );
+    
+    setIsDetailedBallOpen(false);
+  };
   const [isBatsmanSelectorOpen, setIsBatsmanSelectorOpen] = useState(false);
   const [isBowlerSelectorOpen, setIsBowlerSelectorOpen] = useState(false);
   const [battingPlayers, setBattingPlayers] = useState<Player[]>([]);
@@ -74,6 +143,10 @@ export default function MatchScoring() {
 
   useEffect(() => {
     if (!match) return;
+
+    // Clear old players to prevent stale data during transition
+    setBattingPlayers([]);
+    setBowlingPlayers([]);
 
     const battingTeamId = match.currentInnings === 1 ? match.team1Id : match.team2Id;
     const bowlingTeamId = match.currentInnings === 1 ? match.team2Id : match.team1Id;
@@ -124,26 +197,31 @@ export default function MatchScoring() {
     return () => unsubscribe();
   }, [id, navigate]);
 
-  const updateScore = async (runs: number, isWicket: boolean = false, isExtra: boolean = false) => {
+  const [isWicketDialogOpen, setIsWicketDialogOpen] = useState(false);
+  const [isExtraDialogOpen, setIsExtraDialogOpen] = useState(false);
+  const [pendingExtraType, setPendingExtraType] = useState<'wide' | 'noball' | 'bye' | 'legbye'>('wide');
+
+  const updateScore = async (runs: number, isWicket: boolean = false, extraType: 'wide' | 'noball' | 'bye' | 'legbye' | 'none' = 'none', wicketType: string = 'bowled') => {
     if (!match || !id || isUpdating) return;
 
     setIsUpdating(true);
     try {
       const matchRef = doc(db, 'matches', id);
       const isFirstInnings = (match.currentInnings || 1) === 1;
+      const isLegalBall = extraType !== 'wide' && extraType !== 'noball';
       
       // Save current state to history for undo
       const previousPlayerStats = JSON.parse(JSON.stringify(match.playerStats || {}));
       const currentState = {
-        score1: match.score1,
-        wickets1: match.wickets1,
-        balls1: match.balls1,
-        score2: match.score2,
-        wickets2: match.wickets2,
-        balls2: match.balls2,
-        currentInnings: match.currentInnings,
+        score1: match.score1 || 0,
+        wickets1: match.wickets1 || 0,
+        balls1: match.balls1 || 0,
+        score2: match.score2 || 0,
+        wickets2: match.wickets2 || 0,
+        balls2: match.balls2 || 0,
+        currentInnings: match.currentInnings || 1,
         recentBalls: [...(match.recentBalls || [])],
-        status: match.status,
+        status: match.status || 'ongoing',
         result: match.result || null,
         strikerId: match.strikerId || null,
         nonStrikerId: match.nonStrikerId || null,
@@ -154,7 +232,7 @@ export default function MatchScoring() {
         playerStats: previousPlayerStats
       };
 
-      const newHistory = [currentState, ...(match.history || [])].slice(0, 10);
+      const newHistory = JSON.parse(JSON.stringify([currentState, ...(match.history || [])].slice(0, 10)));
       
       const updates: any = {
         status: 'ongoing',
@@ -162,30 +240,68 @@ export default function MatchScoring() {
         playerStats: JSON.parse(JSON.stringify(previousPlayerStats))
       };
 
-      // Ensure striker and bowler are in playerStats
-      if (match.strikerId && !updates.playerStats[match.strikerId]) {
-        updates.playerStats[match.strikerId] = { name: match.strikerName, runs: 0, balls: 0, wickets: 0, runsConceded: 0, ballsBowled: 0 };
+      // Ensure striker and bowler are in playerStats and have all fields
+      if (match.strikerId) {
+        if (!updates.playerStats[match.strikerId]) {
+          updates.playerStats[match.strikerId] = { name: match.strikerName || 'Unknown', runs: 0, balls: 0, wickets: 0, runsConceded: 0, ballsBowled: 0 };
+        } else {
+          const s = updates.playerStats[match.strikerId];
+          s.runs = s.runs || 0;
+          s.balls = s.balls || 0;
+          s.wickets = s.wickets || 0;
+          s.runsConceded = s.runsConceded || 0;
+          s.ballsBowled = s.ballsBowled || 0;
+        }
       }
-      if (match.bowlerId && !updates.playerStats[match.bowlerId]) {
-        updates.playerStats[match.bowlerId] = { name: match.bowlerName, runs: 0, balls: 0, wickets: 0, runsConceded: 0, ballsBowled: 0 };
+      
+      if (match.bowlerId) {
+        if (!updates.playerStats[match.bowlerId]) {
+          updates.playerStats[match.bowlerId] = { name: match.bowlerName || 'Unknown', runs: 0, balls: 0, wickets: 0, runsConceded: 0, ballsBowled: 0 };
+        } else {
+          const b = updates.playerStats[match.bowlerId];
+          b.runs = b.runs || 0;
+          b.balls = b.balls || 0;
+          b.wickets = b.wickets || 0;
+          b.runsConceded = b.runsConceded || 0;
+          b.ballsBowled = b.ballsBowled || 0;
+        }
       }
 
       // Update player stats
-      if (match.strikerId && !isExtra) {
-        updates.playerStats[match.strikerId].runs += runs;
-        updates.playerStats[match.strikerId].balls += 1;
-      }
-      if (match.bowlerId) {
-        updates.playerStats[match.bowlerId].runsConceded += runs;
-        if (!isExtra) {
-          updates.playerStats[match.bowlerId].ballsBowled += 1;
+      if (match.strikerId) {
+        const s = updates.playerStats[match.strikerId];
+        // Batsman gets runs if it's not a Wide/Bye/Leg Bye
+        if (extraType === 'none') {
+          s.runs += runs;
+        } else if (extraType === 'noball') {
+          // For No Ball, batsman only gets runs scored off the bat (total runs - 1 penalty)
+          s.runs += Math.max(0, runs - 1);
         }
-        if (isWicket) {
-          updates.playerStats[match.bowlerId].wickets += 1;
+        
+        // Batsman faces a ball if it's not a Wide
+        if (extraType !== 'wide') {
+          s.balls += 1;
         }
       }
 
-      const ballLabel = isWicket ? 'W' : runs.toString();
+      if (match.bowlerId) {
+        const b = updates.playerStats[match.bowlerId];
+        // Bowler concedes runs for everything except Byes and Leg Byes
+        if (extraType !== 'bye' && extraType !== 'legbye') {
+          b.runsConceded += runs;
+        }
+        
+        // Bowler bowls a legal ball if it's not a Wide or No Ball
+        if (isLegalBall) {
+          b.ballsBowled += 1;
+        }
+        
+        if (isWicket && wicketType !== 'runout') {
+          b.wickets += 1;
+        }
+      }
+
+      const ballLabel = isWicket ? 'W' : extraType === 'wide' ? 'Wd' : extraType === 'noball' ? 'Nb' : runs.toString();
       const newRecentBalls = [ballLabel, ...(match.recentBalls || [])].slice(0, 6);
       updates.recentBalls = newRecentBalls;
 
@@ -199,21 +315,23 @@ export default function MatchScoring() {
       let newNonStrikerId = match.nonStrikerId;
       let newNonStrikerName = match.nonStrikerName;
 
-      if (runs % 2 !== 0 && !isWicket) {
-        // Swap striker and non-striker
+      // Rotate strike on odd runs (only if not a wicket)
+      // For extras (Wide/No Ball), we only rotate if the runs scored by running are odd
+      const actualRunsRun = (extraType === 'wide' || extraType === 'noball') ? runs - 1 : runs;
+      if (actualRunsRun % 2 !== 0 && !isWicket) {
         [newStrikerId, newNonStrikerId] = [newNonStrikerId, newStrikerId];
         [newStrikerName, newNonStrikerName] = [newNonStrikerName, newStrikerName];
       }
 
-      updates.strikerId = newStrikerId;
-      updates.strikerName = newStrikerName;
-      updates.nonStrikerId = newNonStrikerId;
-      updates.nonStrikerName = newNonStrikerName;
+      updates.strikerId = newStrikerId || null;
+      updates.strikerName = newStrikerName || null;
+      updates.nonStrikerId = newNonStrikerId || null;
+      updates.nonStrikerName = newNonStrikerName || null;
 
       if (isFirstInnings) {
         updates.score1 = (match.score1 || 0) + runs;
         updates.wickets1 = (match.wickets1 || 0) + (isWicket ? 1 : 0);
-        updates.balls1 = (match.balls1 || 0) + (!isExtra ? 1 : 0);
+        updates.balls1 = (match.balls1 || 0) + (isLegalBall ? 1 : 0);
         
         ballsAfterUpdate = updates.balls1;
         wicketsAfterUpdate = updates.wickets1;
@@ -239,7 +357,8 @@ export default function MatchScoring() {
             setSelectorType('striker');
           }
           
-          if (ballsAfterUpdate % 6 === 0 && ballsAfterUpdate > 0) {
+          if (isLegalBall && ballsAfterUpdate % 6 === 0 && ballsAfterUpdate > 0) {
+            // End of over
             updates.bowlerId = null;
             updates.bowlerName = null;
             setIsBowlerSelectorOpen(true);
@@ -251,12 +370,19 @@ export default function MatchScoring() {
             updates.strikerName = updates.nonStrikerName;
             updates.nonStrikerId = tempId;
             updates.nonStrikerName = tempName;
+
+            // If a wicket just fell on the last ball, we need to adjust the selector
+            if (isWicket) {
+              // The non-striker (who was just swapped to striker) is now the striker.
+              // We need to select a new NON-STRIKER.
+              setSelectorType('nonStriker');
+            }
           }
         }
       } else {
         updates.score2 = (match.score2 || 0) + runs;
         updates.wickets2 = (match.wickets2 || 0) + (isWicket ? 1 : 0);
-        updates.balls2 = (match.balls2 || 0) + (!isExtra ? 1 : 0);
+        updates.balls2 = (match.balls2 || 0) + (isLegalBall ? 1 : 0);
 
         ballsAfterUpdate = updates.balls2;
         wicketsAfterUpdate = updates.wickets2;
@@ -268,12 +394,14 @@ export default function MatchScoring() {
           updates.status = 'completed';
           updates.result = `${match.team2Name} won by ${10 - wicketsAfterUpdate} wickets`;
           toast.success('Match completed!');
+          await updateCareerStats({ ...match, ...updates });
         } else if (ballsAfterUpdate >= match.overs * 6 || wicketsAfterUpdate >= 10) {
           updates.status = 'completed';
           updates.result = scoreAfterUpdate === match.score1 
             ? 'Match Tied' 
             : `${match.team1Name} won by ${match.score1 - scoreAfterUpdate} runs`;
           toast.success('Match completed!');
+          await updateCareerStats({ ...match, ...updates });
         } else {
           // Check for next batsman or bowler
           if (isWicket) {
@@ -283,7 +411,8 @@ export default function MatchScoring() {
             setSelectorType('striker');
           }
           
-          if (ballsAfterUpdate % 6 === 0 && ballsAfterUpdate > 0) {
+          if (isLegalBall && ballsAfterUpdate % 6 === 0 && ballsAfterUpdate > 0) {
+            // End of over
             updates.bowlerId = null;
             updates.bowlerName = null;
             setIsBowlerSelectorOpen(true);
@@ -295,11 +424,16 @@ export default function MatchScoring() {
             updates.strikerName = updates.nonStrikerName;
             updates.nonStrikerId = tempId;
             updates.nonStrikerName = tempName;
+
+            // If a wicket just fell on the last ball, we need to adjust the selector
+            if (isWicket) {
+              setSelectorType('nonStriker');
+            }
           }
         }
       }
 
-      await updateDoc(matchRef, updates);
+      await updateDoc(matchRef, JSON.parse(JSON.stringify(updates)));
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, `matches/${id}`);
       toast.error('Failed to update score');
@@ -317,16 +451,68 @@ export default function MatchScoring() {
       const lastState = match.history[0];
       const newHistory = match.history.slice(1);
 
-      await updateDoc(matchRef, {
+      await updateDoc(matchRef, JSON.parse(JSON.stringify({
         ...lastState,
         history: newHistory
-      });
+      })));
       toast.success('Last action undone');
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, `matches/${id}`);
       toast.error('Failed to undo');
     } finally {
       setIsUpdating(false);
+    }
+  };
+
+  const updateCareerStats = async (matchData: Match) => {
+    if (!matchData.playerStats || matchData.statsUpdated || !id) return;
+
+    try {
+      const batch = writeBatch(db);
+      const matchRef = doc(db, 'matches', id);
+      const playerIds = Object.keys(matchData.playerStats);
+      
+      for (const playerId of playerIds) {
+        const stats = matchData.playerStats[playerId];
+        const playerRef = doc(db, 'players', playerId);
+        
+        batch.update(playerRef, {
+          'stats.matches': increment(1),
+          'stats.runs': increment(stats.runs || 0),
+          'stats.balls': increment(stats.balls || 0),
+          'stats.wickets': increment(stats.wickets || 0),
+          'stats.runsConceded': increment(stats.runsConceded || 0),
+          'stats.ballsBowled': increment(stats.ballsBowled || 0),
+        });
+      }
+
+      // Update team stats
+      const team1Ref = doc(db, 'teams', matchData.team1Id);
+      const team2Ref = doc(db, 'teams', matchData.team2Id);
+
+      const isDraw = matchData.score1 === matchData.score2;
+      const team1Won = matchData.score1 > matchData.score2;
+
+      batch.update(team1Ref, {
+        'stats.played': increment(1),
+        'stats.won': increment(team1Won ? 1 : 0),
+        'stats.lost': increment(!team1Won && !isDraw ? 1 : 0),
+        'stats.points': increment(team1Won ? 2 : isDraw ? 1 : 0)
+      });
+
+      batch.update(team2Ref, {
+        'stats.played': increment(1),
+        'stats.won': increment(!team1Won && !isDraw ? 1 : 0),
+        'stats.lost': increment(team1Won ? 1 : 0),
+        'stats.points': increment(!team1Won && !isDraw ? 2 : isDraw ? 1 : 0)
+      });
+
+      // Mark stats as updated in the match document
+      batch.update(matchRef, { statsUpdated: true });
+
+      await batch.commit();
+    } catch (error) {
+      console.error('Failed to update career stats:', error);
     }
   };
 
@@ -337,7 +523,7 @@ export default function MatchScoring() {
     try {
       const matchRef = doc(db, 'matches', id);
       if (isFirstInnings) {
-        await updateDoc(matchRef, { 
+        await updateDoc(matchRef, JSON.parse(JSON.stringify({ 
           currentInnings: 2, 
           recentBalls: [],
           strikerId: null,
@@ -346,7 +532,7 @@ export default function MatchScoring() {
           nonStrikerName: null,
           bowlerId: null,
           bowlerName: null
-        });
+        })));
         toast.success('First innings completed!');
       } else {
         const result = match.score1 > match.score2 
@@ -355,7 +541,8 @@ export default function MatchScoring() {
             ? `${match.team2Name} won by ${10 - match.wickets2} wickets`
             : 'Match Tied';
         
-        await updateDoc(matchRef, { status: 'completed', result });
+        await updateDoc(matchRef, JSON.parse(JSON.stringify({ status: 'completed', result })));
+        await updateCareerStats(match);
         toast.success('Match completed!');
       }
     } catch (error) {
@@ -388,7 +575,7 @@ export default function MatchScoring() {
         setIsBowlerSelectorOpen(false);
       }
 
-      await updateDoc(matchRef, updates);
+      await updateDoc(matchRef, JSON.parse(JSON.stringify(updates)));
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, `matches/${id}`);
     }
@@ -597,7 +784,7 @@ export default function MatchScoring() {
                 </Button>
               </CardHeader>
               <CardContent className="p-8 space-y-8">
-                <div className="grid grid-cols-4 md:grid-cols-7 gap-4">
+                <div className="grid grid-cols-4 md:grid-cols-8 gap-4">
                   {['0', '1', '2', '3', '4', '6', 'W'].map((val) => (
                     <Button
                       key={val}
@@ -607,28 +794,255 @@ export default function MatchScoring() {
                         "h-20 rounded-3xl text-2xl font-black transition-all hover:scale-105 active:scale-95 border-2",
                         val === 'W' ? "shadow-lg shadow-destructive/20 border-destructive" : "border-muted/60 hover:border-primary hover:bg-primary/5"
                       )}
-                      onClick={() => updateScore(val === 'W' ? 0 : Number(val), val === 'W')}
+                      onClick={() => {
+                        if (val === 'W') {
+                          setIsWicketDialogOpen(true);
+                        } else {
+                          updateScore(Number(val));
+                        }
+                      }}
                     >
                       {val}
                     </Button>
                   ))}
+                  <Button
+                    variant="secondary"
+                    disabled={isUpdating || !match.strikerId || !match.nonStrikerId || !match.bowlerId}
+                    className="h-20 rounded-3xl flex flex-col items-center justify-center gap-1 border-2 border-muted/60 hover:border-primary hover:bg-primary/5 transition-all hover:scale-105 active:scale-95"
+                    onClick={() => setIsDetailedBallOpen(true)}
+                  >
+                    <PlusCircle size={20} />
+                    <span className="text-[10px] font-black uppercase tracking-widest">Detail</span>
+                  </Button>
                 </div>
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                  {['Wide', 'No Ball', 'Byes', 'Leg Byes'].map((extra) => (
-                    <Button 
-                      key={extra} 
-                      variant="secondary" 
-                      disabled={isUpdating || !match.strikerId || !match.nonStrikerId || !match.bowlerId}
-                      className="h-14 rounded-2xl font-bold text-sm bg-muted/50 hover:bg-muted border border-muted/60"
-                      onClick={() => updateScore(1, false, true)}
-                    >
-                      {extra}
-                    </Button>
-                  ))}
+                  <Button 
+                    variant="secondary" 
+                    disabled={isUpdating || !match.strikerId || !match.nonStrikerId || !match.bowlerId}
+                    className="h-14 rounded-2xl font-bold text-sm bg-muted/50 hover:bg-muted border border-muted/60"
+                    onClick={() => { setPendingExtraType('wide'); setIsExtraDialogOpen(true); }}
+                  >
+                    Wide
+                  </Button>
+                  <Button 
+                    variant="secondary" 
+                    disabled={isUpdating || !match.strikerId || !match.nonStrikerId || !match.bowlerId}
+                    className="h-14 rounded-2xl font-bold text-sm bg-muted/50 hover:bg-muted border border-muted/60"
+                    onClick={() => { setPendingExtraType('noball'); setIsExtraDialogOpen(true); }}
+                  >
+                    No Ball
+                  </Button>
+                  <Button 
+                    variant="secondary" 
+                    disabled={isUpdating || !match.strikerId || !match.nonStrikerId || !match.bowlerId}
+                    className="h-14 rounded-2xl font-bold text-sm bg-muted/50 hover:bg-muted border border-muted/60"
+                    onClick={() => { setPendingExtraType('bye'); setIsExtraDialogOpen(true); }}
+                  >
+                    Byes
+                  </Button>
+                  <Button 
+                    variant="secondary" 
+                    disabled={isUpdating || !match.strikerId || !match.nonStrikerId || !match.bowlerId}
+                    className="h-14 rounded-2xl font-bold text-sm bg-muted/50 hover:bg-muted border border-muted/60"
+                    onClick={() => { setPendingExtraType('legbye'); setIsExtraDialogOpen(true); }}
+                  >
+                    Leg Byes
+                  </Button>
                 </div>
               </CardContent>
             </Card>
           )}
+
+          {/* Dialogs */}
+          <Dialog
+            isOpen={isDetailedBallOpen}
+            onClose={() => setIsDetailedBallOpen(false)}
+            title="Detailed Ball Entry"
+            description="Record all details for this ball at once."
+          >
+            <div className="space-y-6 pt-4 max-h-[70vh] overflow-y-auto px-1">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label className="text-[10px] font-black uppercase tracking-widest opacity-60">Runs off Bat</Label>
+                  <div className="flex flex-wrap gap-2">
+                    {[0, 1, 2, 3, 4, 6].map(r => (
+                      <Button
+                        key={r}
+                        variant={detailedBallData.runs === r ? 'default' : 'outline'}
+                        className={cn("flex-1 h-10 rounded-xl font-bold", detailedBallData.runs === r && "bg-primary text-primary-foreground")}
+                        onClick={() => setDetailedBallData(prev => ({ ...prev, runs: r, extraType: prev.extraType === 'wide' || prev.extraType === 'noball' ? prev.extraType : 'none' }))}
+                      >
+                        {r}
+                      </Button>
+                    ))}
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  <Label className="text-[10px] font-black uppercase tracking-widest opacity-60">Extras</Label>
+                  <div className="flex flex-wrap gap-2">
+                    {['none', 'wide', 'noball', 'bye', 'legbye'].map(type => (
+                      <Button
+                        key={type}
+                        variant={detailedBallData.extraType === type ? 'default' : 'outline'}
+                        className={cn("h-10 rounded-xl font-bold px-3 capitalize", detailedBallData.extraType === type && "bg-primary text-primary-foreground")}
+                        onClick={() => setDetailedBallData(prev => ({ ...prev, extraType: type as any }))}
+                      >
+                        {type === 'none' ? 'None' : type}
+                      </Button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              {detailedBallData.extraType !== 'none' && (
+                <div className="space-y-2">
+                  <Label className="text-[10px] font-black uppercase tracking-widest opacity-60">Extra Runs (excluding penalty)</Label>
+                  <div className="flex gap-2">
+                    {[0, 1, 2, 3, 4].map(r => (
+                      <Button
+                        key={r}
+                        variant={detailedBallData.extraRuns === r ? 'default' : 'outline'}
+                        className={cn("flex-1 h-10 rounded-xl font-bold", detailedBallData.extraRuns === r && "bg-primary text-primary-foreground")}
+                        onClick={() => setDetailedBallData(prev => ({ ...prev, extraRuns: r }))}
+                      >
+                        {r}
+                      </Button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <div className="flex items-center justify-between p-4 bg-muted/20 rounded-2xl border border-muted/40">
+                <div className="flex items-center gap-3">
+                  <div className={cn("w-10 h-10 rounded-xl flex items-center justify-center font-black", detailedBallData.isWicket ? "bg-destructive text-destructive-foreground" : "bg-muted text-muted-foreground")}>
+                    W
+                  </div>
+                  <div>
+                    <div className="font-bold">Wicket?</div>
+                    <div className="text-[10px] font-black uppercase tracking-widest opacity-60">Is the batsman out?</div>
+                  </div>
+                </div>
+                <Button
+                  variant={detailedBallData.isWicket ? 'destructive' : 'outline'}
+                  className="rounded-xl font-bold"
+                  onClick={() => setDetailedBallData(prev => ({ ...prev, isWicket: !prev.isWicket }))}
+                >
+                  {detailedBallData.isWicket ? 'Yes, Out' : 'No'}
+                </Button>
+              </div>
+
+              {detailedBallData.isWicket && (
+                <div className="space-y-2">
+                  <Label className="text-[10px] font-black uppercase tracking-widest opacity-60">Dismissal Type</Label>
+                  <div className="grid grid-cols-3 gap-2">
+                    {['Bowled', 'Caught', 'LBW', 'Run Out', 'Stumped', 'Hit Wicket'].map(type => (
+                      <Button
+                        key={type}
+                        variant={detailedBallData.wicketType === type.toLowerCase().replace(' ', '') ? 'default' : 'outline'}
+                        className={cn("h-10 rounded-xl font-bold text-xs", detailedBallData.wicketType === type.toLowerCase().replace(' ', '') && "bg-primary text-primary-foreground")}
+                        onClick={() => setDetailedBallData(prev => ({ ...prev, wicketType: type.toLowerCase().replace(' ', '') }))}
+                      >
+                        {type}
+                      </Button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <div className="space-y-4 pt-4 border-t border-muted/60">
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label className="text-[10px] font-black uppercase tracking-widest opacity-60">Striker</Label>
+                    <Select 
+                      value={detailedBallData.strikerId} 
+                      onChange={(e) => setDetailedBallData(prev => ({ ...prev, strikerId: e.target.value }))}
+                      className="h-12 rounded-xl"
+                    >
+                      {battingPlayers.map(p => (
+                        <option key={p.id} value={p.id}>{p.name}</option>
+                      ))}
+                    </Select>
+                  </div>
+                  <div className="space-y-2">
+                    <Label className="text-[10px] font-black uppercase tracking-widest opacity-60">Non-Striker</Label>
+                    <Select 
+                      value={detailedBallData.nonStrikerId} 
+                      onChange={(e) => setDetailedBallData(prev => ({ ...prev, nonStrikerId: e.target.value }))}
+                      className="h-12 rounded-xl"
+                    >
+                      {battingPlayers.map(p => (
+                        <option key={p.id} value={p.id}>{p.name}</option>
+                      ))}
+                    </Select>
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  <Label className="text-[10px] font-black uppercase tracking-widest opacity-60">Bowler</Label>
+                  <Select 
+                    value={detailedBallData.bowlerId} 
+                    onChange={(e) => setDetailedBallData(prev => ({ ...prev, bowlerId: e.target.value }))}
+                    className="h-12 rounded-xl"
+                  >
+                    {bowlingPlayers.map(p => (
+                      <option key={p.id} value={p.id}>{p.name}</option>
+                    ))}
+                  </Select>
+                </div>
+              </div>
+
+              <div className="flex gap-3 pt-4">
+                <Button variant="outline" className="flex-1 h-12 rounded-xl font-bold" onClick={() => setIsDetailedBallOpen(false)}>Cancel</Button>
+                <Button className="flex-1 h-12 rounded-xl font-bold shadow-lg shadow-primary/20" onClick={handleDetailedBallSubmit}>Record Ball</Button>
+              </div>
+            </div>
+          </Dialog>
+
+          <Dialog
+            isOpen={isWicketDialogOpen}
+            onClose={() => setIsWicketDialogOpen(false)}
+            title="Wicket Type"
+            description="Select how the batsman was dismissed."
+          >
+            <div className="grid grid-cols-2 gap-3 py-4">
+              {['Bowled', 'Caught', 'LBW', 'Run Out', 'Stumped', 'Hit Wicket'].map((type) => (
+                <Button
+                  key={type}
+                  variant="outline"
+                  className="h-12 font-bold"
+                  onClick={() => {
+                    updateScore(0, true, 'none', type.toLowerCase().replace(' ', ''));
+                    setIsWicketDialogOpen(false);
+                  }}
+                >
+                  {type}
+                </Button>
+              ))}
+            </div>
+          </Dialog>
+
+          <Dialog
+            isOpen={isExtraDialogOpen}
+            onClose={() => setIsExtraDialogOpen(false)}
+            title={`${pendingExtraType.charAt(0).toUpperCase() + pendingExtraType.slice(1)} Runs`}
+            description="How many additional runs were scored?"
+          >
+            <div className="grid grid-cols-3 gap-3 py-4">
+              {[0, 1, 2, 3, 4, 6].map((r) => (
+                <Button
+                  key={r}
+                  variant="outline"
+                  className="h-12 font-bold"
+                  onClick={() => {
+                    const totalRuns = (pendingExtraType === 'wide' || pendingExtraType === 'noball') ? r + 1 : r;
+                    updateScore(totalRuns, false, pendingExtraType);
+                    setIsExtraDialogOpen(false);
+                  }}
+                >
+                  {r === 0 ? 'Just Penalty' : `+ ${r} Runs`}
+                </Button>
+              ))}
+            </div>
+          </Dialog>
 
           {match.status === 'completed' && (
             <Card className="rounded-[2.5rem] border-primary/20 bg-primary/5 overflow-hidden">
@@ -719,6 +1133,37 @@ export default function MatchScoring() {
               <Input id="overs" type="number" value={match.overs} readOnly className="h-12 rounded-xl bg-muted/20" />
             </div>
           </div>
+          
+          {match.balls1 === 0 && match.currentInnings === 1 && (
+            <div className="pt-4 border-t">
+              <Button 
+                variant="outline" 
+                className="w-full h-12 rounded-xl font-bold gap-2 border-primary/20 hover:bg-primary/5 text-primary"
+                onClick={async () => {
+                  const matchRef = doc(db, 'matches', id!);
+                  await updateDoc(matchRef, JSON.parse(JSON.stringify({
+                    team1Id: match.team2Id,
+                    team2Id: match.team1Id,
+                    team1Name: match.team2Name,
+                    team2Name: match.team1Name,
+                    strikerId: null,
+                    nonStrikerId: null,
+                    bowlerId: null,
+                    strikerName: null,
+                    nonStrikerName: null,
+                    bowlerName: null
+                  })));
+                  toast.success('Batting order swapped!');
+                  setIsSettingsOpen(false);
+                }}
+              >
+                <Activity size={18} />
+                Swap Batting Order
+              </Button>
+              <p className="text-[10px] text-muted-foreground mt-2 text-center font-medium">Available only before the first ball is bowled.</p>
+            </div>
+          )}
+
           <div className="flex gap-3 pt-2">
             <Button variant="outline" className="flex-1 h-12 rounded-xl font-bold" onClick={() => setIsSettingsOpen(false)}>Close</Button>
           </div>
@@ -755,7 +1200,31 @@ export default function MatchScoring() {
               </Button>
             ))}
           {battingPlayers.length === 0 && (
-            <div className="text-center py-10 text-muted-foreground">No players found for this team.</div>
+            <div className="text-center py-10 space-y-4">
+              <div className="text-muted-foreground font-medium">No players found for this team.</div>
+              <Button 
+                variant="outline" 
+                className="gap-2 border-primary/20 text-primary hover:bg-primary/5"
+                onClick={async () => {
+                  const name = prompt('Enter player name:');
+                  if (name) {
+                    const battingTeamId = match.currentInnings === 1 ? match.team1Id : match.team2Id;
+                    const playerRef = doc(collection(db, 'players'));
+                    await setDoc(playerRef, {
+                      id: playerRef.id,
+                      name,
+                      teamId: battingTeamId,
+                      role: 'Batsman',
+                      stats: { matches: 0, runs: 0, balls: 0, wickets: 0, runsConceded: 0, ballsBowled: 0 }
+                    });
+                    toast.success('Player added!');
+                  }
+                }}
+              >
+                <PlusCircle size={18} />
+                Quick Add Player
+              </Button>
+            </div>
           )}
         </div>
       </Dialog>
@@ -790,7 +1259,31 @@ export default function MatchScoring() {
               </Button>
             ))}
           {bowlingPlayers.length === 0 && (
-            <div className="text-center py-10 text-muted-foreground">No players found for this team.</div>
+            <div className="text-center py-10 space-y-4">
+              <div className="text-muted-foreground font-medium">No players found for this team.</div>
+              <Button 
+                variant="outline" 
+                className="gap-2 border-primary/20 text-primary hover:bg-primary/5"
+                onClick={async () => {
+                  const name = prompt('Enter player name:');
+                  if (name) {
+                    const bowlingTeamId = match.currentInnings === 1 ? match.team2Id : match.team1Id;
+                    const playerRef = doc(collection(db, 'players'));
+                    await setDoc(playerRef, {
+                      id: playerRef.id,
+                      name,
+                      teamId: bowlingTeamId,
+                      role: 'Bowler',
+                      stats: { matches: 0, runs: 0, balls: 0, wickets: 0, runsConceded: 0, ballsBowled: 0 }
+                    });
+                    toast.success('Player added!');
+                  }
+                }}
+              >
+                <PlusCircle size={18} />
+                Quick Add Player
+              </Button>
+            </div>
           )}
         </div>
       </Dialog>

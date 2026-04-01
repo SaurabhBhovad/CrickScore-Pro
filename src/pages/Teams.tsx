@@ -6,10 +6,10 @@ import { Label } from '@/src/components/ui/Label';
 import { Input } from '@/src/components/ui/Input';
 import { Select } from '@/src/components/ui/Select';
 import { Badge } from '@/src/components/ui/Badge';
-import { Users, Plus, Search, Filter, MapPin, Calendar, Trophy, Loader2, Activity, User, Image as ImageIcon, X, Upload } from 'lucide-react';
+import { Users, Plus, Search, Filter, MapPin, Calendar, Trophy, Loader2, Activity, User, Image as ImageIcon, X, Upload, Trash2 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { cn } from '@/src/lib/utils';
-import { db, collection, onSnapshot, setDoc, doc, query, where, handleFirestoreError, OperationType } from '../firebase';
+import { db, collection, onSnapshot, setDoc, doc, query, where, handleFirestoreError, OperationType, deleteDoc, getDocs, writeBatch } from '../firebase';
 import { useFirebase } from '../components/FirebaseProvider';
 import { toast } from 'sonner';
 
@@ -51,8 +51,10 @@ export default function Teams() {
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [teams, setTeams] = useState<Team[]>([]);
+  const [playerCounts, setPlayerCounts] = useState<Record<string, number>>({});
   const [loading, setLoading] = useState(true);
   const [isCreating, setIsCreating] = useState(false);
+  const [teamToDelete, setTeamToDelete] = useState<Team | null>(null);
 
   // Form state
   const [newTeam, setNewTeam] = useState({
@@ -66,7 +68,7 @@ export default function Teams() {
 
   useEffect(() => {
     const teamsRef = collection(db, 'teams');
-    const unsubscribe = onSnapshot(teamsRef, (snapshot) => {
+    const unsubscribeTeams = onSnapshot(teamsRef, (snapshot) => {
       const teamsData = snapshot.docs.map(doc => ({
         id: doc.id,
         ...doc.data()
@@ -78,12 +80,31 @@ export default function Teams() {
       setLoading(false);
     });
 
-    return () => unsubscribe();
+    const playersRef = collection(db, 'players');
+    const unsubscribePlayers = onSnapshot(playersRef, (snapshot) => {
+      const counts: Record<string, number> = {};
+      snapshot.docs.forEach(doc => {
+        const teamId = doc.data().teamId;
+        if (teamId) {
+          counts[teamId] = (counts[teamId] || 0) + 1;
+        }
+      });
+      setPlayerCounts(counts);
+    });
+
+    return () => {
+      unsubscribeTeams();
+      unsubscribePlayers();
+    };
   }, []);
 
   const handleLogoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
+      if (file.size > 500 * 1024) {
+        toast.error('Logo size should be less than 500KB');
+        return;
+      }
       const reader = new FileReader();
       reader.onloadend = () => {
         setNewTeam({ ...newTeam, logo: reader.result as string });
@@ -95,6 +116,10 @@ export default function Teams() {
   const handlePlayerPhotoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
+      if (file.size > 500 * 1024) {
+        toast.error('Photo size should be less than 500KB');
+        return;
+      }
       const reader = new FileReader();
       reader.onloadend = () => {
         setNewPlayerPhoto(reader.result as string);
@@ -115,7 +140,10 @@ export default function Teams() {
   };
 
   const handleCreateTeam = async () => {
-    if (!user) return;
+    if (!user) {
+      toast.error('You must be logged in to create a team');
+      return;
+    }
     if (!newTeam.name.trim()) {
       toast.error('Team name is required');
       return;
@@ -123,6 +151,13 @@ export default function Teams() {
 
     setIsCreating(true);
     try {
+      // If there's a partially filled player, add them automatically
+      let finalPlayers = [...teamPlayers];
+      if (newPlayerName.trim()) {
+        finalPlayers.push({ name: newPlayerName, role: newPlayerRole, photo: newPlayerPhoto });
+      }
+
+      console.log('Creating team:', newTeam.name, 'with', finalPlayers.length, 'players');
       const teamId = doc(collection(db, 'teams')).id;
       const teamData: Team = {
         id: teamId,
@@ -138,9 +173,10 @@ export default function Teams() {
       };
 
       await setDoc(doc(db, 'teams', teamId), teamData);
+      console.log('Team document created:', teamId);
 
       // Create players
-      for (const p of teamPlayers) {
+      for (const p of finalPlayers) {
         const playerId = doc(collection(db, 'players')).id;
         const playerData: Player = {
           id: playerId,
@@ -149,7 +185,7 @@ export default function Teams() {
           battingStyle: 'Right-hand',
           teamId: teamId,
           ownerId: user.uid,
-          photo: p.photo,
+          photo: p.photo || null,
           stats: {
             matches: 0,
             runs: 0,
@@ -161,17 +197,49 @@ export default function Teams() {
           }
         };
         await setDoc(doc(db, 'players', playerId), playerData);
+        console.log('Player document created:', playerId);
       }
 
       toast.success('Team and players created successfully!');
       setIsCreateDialogOpen(false);
       setNewTeam({ name: '', logo: '' });
       setTeamPlayers([]);
-    } catch (error) {
-      handleFirestoreError(error, OperationType.CREATE, 'teams');
-      toast.error('Failed to create team');
+      setNewPlayerName('');
+      setNewPlayerPhoto(undefined);
+    } catch (error: any) {
+      console.error('Error creating team:', error);
+      try {
+        handleFirestoreError(error, OperationType.CREATE, 'teams');
+      } catch (err: any) {
+        toast.error('Failed to create team: ' + (err.message || 'Unknown error'));
+      }
     } finally {
       setIsCreating(false);
+    }
+  };
+
+  const handleDeleteTeam = async (teamId: string) => {
+    if (!user) return;
+    
+    try {
+      // 1. Delete all players associated with this team
+      const playersQuery = query(collection(db, 'players'), where('teamId', '==', teamId));
+      const playersSnapshot = await getDocs(playersQuery);
+      
+      const batch = writeBatch(db);
+      playersSnapshot.docs.forEach((doc) => {
+        batch.delete(doc.ref);
+      });
+      
+      // 2. Delete the team document
+      batch.delete(doc(db, 'teams', teamId));
+      
+      await batch.commit();
+      toast.success('Team and its players deleted successfully');
+      setTeamToDelete(null);
+    } catch (error: any) {
+      console.error('Error deleting team:', error);
+      toast.error('Failed to delete team');
     }
   };
 
@@ -221,8 +289,24 @@ export default function Teams() {
       ) : (
         <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
           {filteredTeams.map((team) => (
-            <Card key={team.id} className="group hover:shadow-xl transition-all duration-300 border-muted/60 overflow-hidden">
+            <Card key={team.id} className="group hover:shadow-xl transition-all duration-300 border-muted/60 overflow-hidden relative">
               <div className="h-2 bg-primary/10 group-hover:bg-primary transition-colors" />
+              {user?.uid === team.ownerId && (
+                <div className="absolute top-4 right-4 z-10 opacity-0 group-hover:opacity-100 transition-opacity">
+                  <Button 
+                    variant="destructive" 
+                    size="icon" 
+                    className="h-8 w-8 rounded-full shadow-lg"
+                    onClick={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      setTeamToDelete(team);
+                    }}
+                  >
+                    <Trash2 size={14} />
+                  </Button>
+                </div>
+              )}
               <CardHeader className="pb-2 text-center">
                 <div className="w-24 h-24 rounded-2xl bg-secondary flex items-center justify-center text-secondary-foreground mb-4 mx-auto font-bold text-3xl shadow-md border-4 border-background group-hover:scale-105 transition-transform overflow-hidden">
                   {team.logo ? (
@@ -234,7 +318,7 @@ export default function Teams() {
                 <CardTitle className="text-2xl group-hover:text-primary transition-colors truncate">{team.name}</CardTitle>
                 <div className="flex items-center justify-center gap-2 mt-2 text-muted-foreground">
                   <Users size={14} />
-                  <span className="text-sm">Professional Circuit</span>
+                  <span className="text-sm">{playerCounts[team.id] || 0} Players</span>
                 </div>
               </CardHeader>
               <CardContent>
@@ -404,6 +488,20 @@ export default function Teams() {
               Create Team
             </Button>
           </div>
+        </div>
+      </Dialog>
+
+      <Dialog
+        isOpen={!!teamToDelete}
+        onClose={() => setTeamToDelete(null)}
+        title="Delete Team?"
+        description={`This will permanently delete "${teamToDelete?.name}" and all its players. This action cannot be undone.`}
+      >
+        <div className="flex justify-end gap-3 pt-4">
+          <Button variant="outline" onClick={() => setTeamToDelete(null)}>Cancel</Button>
+          <Button variant="destructive" onClick={() => teamToDelete && handleDeleteTeam(teamToDelete.id)}>
+            Delete Team
+          </Button>
         </div>
       </Dialog>
     </div>

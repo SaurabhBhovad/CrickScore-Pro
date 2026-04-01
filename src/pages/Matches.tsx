@@ -61,7 +61,9 @@ export default function Matches() {
     tournamentId: '',
     overs: 20,
     matchType: 'T20',
-    date: new Date().toISOString().slice(0, 16)
+    date: new Date().toISOString().slice(0, 16),
+    tossWinnerId: '',
+    tossDecision: 'bat' as 'bat' | 'bowl'
   });
 
   useEffect(() => {
@@ -123,15 +125,36 @@ export default function Matches() {
       const team1 = teams.find(t => t.id === newMatch.team1Id);
       const team2 = teams.find(t => t.id === newMatch.team2Id);
 
-      const matchData: Match = {
+      // Determine who bats first
+      let battingFirstId = newMatch.team1Id;
+      let bowlingFirstId = newMatch.team2Id;
+
+      if (newMatch.tossWinnerId) {
+        const tossWinnerId = newMatch.tossWinnerId;
+        const tossLoserId = tossWinnerId === newMatch.team1Id ? newMatch.team2Id : newMatch.team1Id;
+        
+        if (newMatch.tossDecision === 'bat') {
+          battingFirstId = tossWinnerId;
+          bowlingFirstId = tossLoserId;
+        } else {
+          battingFirstId = tossLoserId;
+          bowlingFirstId = tossWinnerId;
+        }
+      }
+
+      const matchData: any = {
         id: matchId,
-        team1Id: newMatch.team1Id,
-        team2Id: newMatch.team2Id,
-        team1Name: team1?.name || 'Team 1',
-        team2Name: team2?.name || 'Team 2',
+        team1Id: battingFirstId, // Team 1 is always batting first in our scoring logic
+        team2Id: bowlingFirstId, // Team 2 is always bowling first in our scoring logic
+        team1Name: teams.find(t => t.id === battingFirstId)?.name || 'Team 1',
+        team2Name: teams.find(t => t.id === bowlingFirstId)?.name || 'Team 2',
+        originalTeam1Id: newMatch.team1Id,
+        originalTeam2Id: newMatch.team2Id,
+        tossWinnerId: newMatch.tossWinnerId || null,
+        tossDecision: newMatch.tossDecision,
         date: newMatch.date,
         status: 'scheduled',
-        tournamentId: newMatch.tournamentId || undefined,
+        tournamentId: newMatch.tournamentId || null,
         overs: Number(newMatch.overs),
         matchType: newMatch.matchType,
         score1: 0,
@@ -139,7 +162,8 @@ export default function Matches() {
         balls1: 0,
         score2: 0,
         wickets2: 0,
-        balls2: 0
+        balls2: 0,
+        currentInnings: 1
       };
 
       await setDoc(doc(db, 'matches', matchId), matchData);
@@ -344,6 +368,38 @@ export default function Matches() {
               </select>
             </div>
           </div>
+
+          <div className="pt-4 border-t space-y-4">
+            <h3 className="text-sm font-bold uppercase tracking-widest text-muted-foreground">Toss Details</h3>
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label htmlFor="tossWinner">Toss Winner</Label>
+                <select 
+                  id="tossWinner" 
+                  className="w-full h-11 rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                  value={newMatch.tossWinnerId}
+                  onChange={(e) => setNewMatch({...newMatch, tossWinnerId: e.target.value})}
+                >
+                  <option value="">Select Winner</option>
+                  {newMatch.team1Id && <option value={newMatch.team1Id}>{teams.find(t => t.id === newMatch.team1Id)?.name}</option>}
+                  {newMatch.team2Id && <option value={newMatch.team2Id}>{teams.find(t => t.id === newMatch.team2Id)?.name}</option>}
+                </select>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="tossDecision">Decision</Label>
+                <select 
+                  id="tossDecision" 
+                  className="w-full h-11 rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                  value={newMatch.tossDecision}
+                  onChange={(e) => setNewMatch({...newMatch, tossDecision: e.target.value as 'bat' | 'bowl'})}
+                >
+                  <option value="bat">Batting First</option>
+                  <option value="bowl">Bowling First</option>
+                </select>
+              </div>
+            </div>
+          </div>
+
           <div className="space-y-2">
             <Label htmlFor="date">Match Date & Time</Label>
             <Input 
