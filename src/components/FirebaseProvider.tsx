@@ -19,63 +19,67 @@ export const FirebaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
   useEffect(() => {
     let isMounted = true;
+    let redirectChecked = false;
+    let authFired = false;
 
-    const initAuth = async () => {
-      try {
-        // Wait for redirect result to settle before deciding on loading state
-        await getRedirectResult(auth);
-      } catch (error: any) {
-        console.error('Redirect sign-in error:', error);
-        if (error.code === 'auth/unauthorized-domain') {
-          toast.error('This domain is not authorized in Firebase. Please add this URL to the Authorized Domains list in Firebase Console.');
-        }
+    const maybeStopLoading = () => {
+      if (redirectChecked && authFired && isMounted) {
+        setLoading(false);
       }
-
-      const unsubscribe = onAuthStateChanged(auth, (user) => {
-        if (isMounted) {
-          setUser(user);
-          setLoading(false);
-        }
-      });
-
-      return unsubscribe;
     };
 
-    let unsubscribe: (() => void) | undefined;
-    initAuth().then(unsub => {
-      unsubscribe = unsub;
+    // 1. Listen for auth state changes
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
+      if (isMounted) {
+        setUser(user);
+        authFired = true;
+        maybeStopLoading();
+      }
+    });
+
+    // 2. Check for redirect result in parallel
+    getRedirectResult(auth).then((result) => {
+      if (result?.user && isMounted) {
+        toast.success('Successfully signed in!');
+      }
+      redirectChecked = true;
+      maybeStopLoading();
+    }).catch((error: any) => {
+      console.error('Redirect sign-in error:', error);
+      if (error.code === 'auth/unauthorized-domain') {
+        toast.error('This domain is not authorized in Firebase. Please add this URL to the Authorized Domains list in Firebase Console.');
+      }
+      redirectChecked = true;
+      maybeStopLoading();
     });
 
     return () => {
       isMounted = false;
-      if (unsubscribe) unsubscribe();
+      unsubscribe();
     };
   }, []);
 
   const login = async () => {
-    const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
     const isIframe = window.self !== window.top;
 
     try {
-      // On mobile and not in an iframe, redirect is often more reliable
-      if (isMobile && !isIframe) {
-        await signInWithRedirect(auth, googleProvider);
-        return;
-      }
-
+      // Always try popup first as it's more reliable for state persistence
       await signInWithPopup(auth, googleProvider);
       toast.success('Successfully signed in!');
     } catch (error: any) {
       console.error('Login error:', error);
+      
       if (error.code === 'auth/unauthorized-domain') {
         toast.error('This domain is not authorized in Firebase. Please add this URL to the Authorized Domains list in Firebase Console.');
       } else if (error.code === 'auth/popup-closed-by-user') {
-        toast.error('Sign-in popup was closed before completion.');
-      } else if (error.code === 'auth/popup-blocked') {
-        toast.error('Sign-in popup was blocked. Please allow popups or try a different browser.');
-        // Fallback to redirect if popup is blocked and not in iframe
+        toast.info('Sign-in was cancelled.');
+      } else if (error.code === 'auth/popup-blocked' || error.code === 'auth/cancelled-popup-request') {
+        // If popup is blocked and we're not in an iframe, fallback to redirect
         if (!isIframe) {
+          toast.info('Popup blocked. Trying redirect method...');
           await signInWithRedirect(auth, googleProvider);
+        } else {
+          toast.error('Sign-in popup was blocked. Please allow popups for this site.');
         }
       } else {
         toast.error('Failed to sign in. Please try again.');
