@@ -7,7 +7,7 @@ import { Label } from '@/src/components/ui/Label';
 import { Input } from '@/src/components/ui/Input';
 import { Trophy, Plus, Search, Filter, Calendar, Users, Activity, Loader2 } from 'lucide-react';
 import { Link } from 'react-router-dom';
-import { db, collection, onSnapshot, setDoc, doc, handleFirestoreError, OperationType } from '../firebase';
+import { db, collection, onSnapshot, setDoc, doc, handleFirestoreError, OperationType, query, where } from '../firebase';
 import { useFirebase } from '../components/FirebaseProvider';
 import { toast } from 'sonner';
 
@@ -44,9 +44,11 @@ export default function Tournaments() {
   });
 
   useEffect(() => {
+    if (!user) return;
+
     // Fetch tournaments
-    const tournamentsRef = collection(db, 'tournaments');
-    const unsubscribeTournaments = onSnapshot(tournamentsRef, (snapshot) => {
+    const tournamentsQuery = query(collection(db, 'tournaments'), where('ownerId', '==', user.uid));
+    const unsubscribeTournaments = onSnapshot(tournamentsQuery, (snapshot) => {
       const tournamentsData = snapshot.docs.map(doc => ({
         id: doc.id,
         ...doc.data()
@@ -59,8 +61,8 @@ export default function Tournaments() {
     });
 
     // Fetch teams for selection
-    const teamsRef = collection(db, 'teams');
-    const unsubscribeTeams = onSnapshot(teamsRef, (snapshot) => {
+    const teamsQuery = query(collection(db, 'teams'), where('ownerId', '==', user.uid));
+    const unsubscribeTeams = onSnapshot(teamsQuery, (snapshot) => {
       const teamsData = snapshot.docs.map(doc => ({
         id: doc.id,
         name: doc.data().name
@@ -72,7 +74,7 @@ export default function Tournaments() {
       unsubscribeTournaments();
       unsubscribeTeams();
     };
-  }, []);
+  }, [user]);
 
   const handleCreateTournament = async () => {
     if (!user) return;

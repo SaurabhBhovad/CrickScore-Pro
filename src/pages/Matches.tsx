@@ -6,11 +6,12 @@ import { Dialog } from '@/src/components/ui/Dialog';
 import { Label } from '@/src/components/ui/Label';
 import { Input } from '@/src/components/ui/Input';
 import { Select } from '@/src/components/ui/Select';
-import { Trophy, Plus, Search, Filter, Calendar, Clock, MapPin, Activity, Loader2 } from 'lucide-react';
+import { Trophy, Plus, Search, Filter, Calendar, Clock, MapPin, Activity, Loader2, FileText } from 'lucide-react';
 import { Link, useNavigate } from 'react-router-dom';
-import { db, collection, onSnapshot, setDoc, doc, handleFirestoreError, OperationType } from '../firebase';
+import { db, collection, onSnapshot, setDoc, doc, handleFirestoreError, OperationType, query, where } from '../firebase';
 import { useFirebase } from '../components/FirebaseProvider';
 import { toast } from 'sonner';
+import Scorecard from '../components/Scorecard';
 
 interface Match {
   id: string;
@@ -31,6 +32,7 @@ interface Match {
   score2: number;
   wickets2: number;
   balls2: number;
+  playerStats?: any;
 }
 
 interface Team {
@@ -66,10 +68,14 @@ export default function Matches() {
     tossDecision: 'bat' as 'bat' | 'bowl'
   });
 
+  const [selectedMatchForScorecard, setSelectedMatchForScorecard] = useState<Match | null>(null);
+
   useEffect(() => {
+    if (!user) return;
+
     // Fetch matches
-    const matchesRef = collection(db, 'matches');
-    const unsubscribeMatches = onSnapshot(matchesRef, (snapshot) => {
+    const matchesQuery = query(collection(db, 'matches'), where('ownerId', '==', user.uid));
+    const unsubscribeMatches = onSnapshot(matchesQuery, (snapshot) => {
       const matchesData = snapshot.docs.map(doc => ({
         id: doc.id,
         ...doc.data()
@@ -82,8 +88,8 @@ export default function Matches() {
     });
 
     // Fetch teams
-    const teamsRef = collection(db, 'teams');
-    const unsubscribeTeams = onSnapshot(teamsRef, (snapshot) => {
+    const teamsQuery = query(collection(db, 'teams'), where('ownerId', '==', user.uid));
+    const unsubscribeTeams = onSnapshot(teamsQuery, (snapshot) => {
       const teamsData = snapshot.docs.map(doc => ({
         id: doc.id,
         name: doc.data().name
@@ -92,8 +98,8 @@ export default function Matches() {
     });
 
     // Fetch tournaments
-    const tournamentsRef = collection(db, 'tournaments');
-    const unsubscribeTournaments = onSnapshot(tournamentsRef, (snapshot) => {
+    const tournamentsQuery = query(collection(db, 'tournaments'), where('ownerId', '==', user.uid));
+    const unsubscribeTournaments = onSnapshot(tournamentsQuery, (snapshot) => {
       const tournamentsData = snapshot.docs.map(doc => ({
         id: doc.id,
         name: doc.data().name
@@ -106,7 +112,7 @@ export default function Matches() {
       unsubscribeTeams();
       unsubscribeTournaments();
     };
-  }, []);
+  }, [user]);
 
   const handleCreateMatch = async () => {
     if (!user) return;
@@ -144,6 +150,7 @@ export default function Matches() {
 
       const matchData: any = {
         id: matchId,
+        ownerId: user.uid,
         team1Id: battingFirstId, // Team 1 is always batting first in our scoring logic
         team2Id: bowlingFirstId, // Team 2 is always bowling first in our scoring logic
         team1Name: teams.find(t => t.id === battingFirstId)?.name || 'Team 1',
@@ -278,11 +285,25 @@ export default function Matches() {
                     </div>
                   </div>
                   {match.result && (
-                    <div className="pt-4 border-t">
+                    <div className="pt-4 border-t flex items-center justify-between">
                       <div className="flex items-center gap-2 text-sm font-bold text-primary">
                         <Activity size={14} />
                         <span>{match.result}</span>
                       </div>
+                      {match.status === 'completed' && (
+                        <Button 
+                          variant="ghost" 
+                          size="sm" 
+                          className="h-8 px-2 text-xs font-bold gap-1 text-muted-foreground hover:text-primary"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setSelectedMatchForScorecard(match);
+                          }}
+                        >
+                          <FileText size={14} />
+                          Scorecard
+                        </Button>
+                      )}
                     </div>
                   )}
                 </div>
@@ -291,6 +312,18 @@ export default function Matches() {
           ))}
         </div>
       )}
+
+      <Dialog
+        isOpen={!!selectedMatchForScorecard}
+        onClose={() => setSelectedMatchForScorecard(null)}
+        title="Match Scorecard"
+        description="Detailed statistics for this match."
+        className="max-w-4xl"
+      >
+        <div className="py-4">
+          {selectedMatchForScorecard && <Scorecard match={selectedMatchForScorecard as any} />}
+        </div>
+      </Dialog>
 
       <Dialog
         isOpen={isCreateDialogOpen}

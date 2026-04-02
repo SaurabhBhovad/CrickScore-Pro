@@ -1,30 +1,29 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { MessageCircle, X, Send, Loader2, Bot, User } from 'lucide-react';
+import { MessageCircle, X, Send, Loader2, Bot, User, Sparkles } from 'lucide-react';
 import { GoogleGenAI } from "@google/genai";
 import ReactMarkdown from 'react-markdown';
 import { Button } from './ui/Button';
 import { Input } from './ui/Input';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/Card';
 import { cn } from '../lib/utils';
+import { useFirebase } from './FirebaseProvider';
+import { db, collection, query, where, onSnapshot } from '../firebase';
 
-const SYSTEM_INSTRUCTION = `You are a helpful AI assistant for a Cricket Scoring application. Your goal is to guide new users on how to use the app.
-The app has the following features:
-1. Dashboard: Shows recent matches, top players, and overall statistics.
-2. Teams: Users can create teams, add players to them, and view team details.
-3. Players: Users can view player profiles, their career statistics (runs, wickets, matches), and their recent performances.
-4. Matches: Users can schedule new matches (T20, ODI, Test), select teams, and set the number of overs.
-5. Tournaments: Users can organize multiple matches into a tournament and view the points table.
-6. Scoring: This is the core feature. During a match, users can record every ball.
-   - Quick scoring: Buttons for 0, 1, 2, 3, 4, 6, and Wicket.
-   - Extras: Buttons for Wide, No Ball, Bye, and Leg Bye.
-   - Detailed Ball Entry: A 'Detail' button to record multiple things at once (e.g., No Ball + 4 runs + Wicket).
-   - Player Selection: Users must select a Striker, Non-Striker, and Bowler to start scoring.
-   - Undo: A button to undo the last recorded ball.
-   - Finish Innings/Match: Buttons to complete the current innings or the entire match.
-7. Profile: Users can manage their profile information.
+const SYSTEM_INSTRUCTION = `You are a helpful AI assistant for a Cricket Scoring application. Your goal is to guide users and answer questions about their data.
+The app has features like Dashboard, Teams, Players, Matches, Tournaments, and real-time Scoring.
 
-When a user asks a question, provide clear, step-by-step instructions. Be friendly and encouraging. If you don't know the answer, suggest they explore the app or ask for more details.`;
+You have access to the user's current data provided in the context. Use this data to answer specific questions like "who is the best player in [Tournament Name]" or "how many matches has [Team Name] won".
+
+When answering:
+1. Be concise and friendly.
+2. Use the provided data to give accurate answers.
+3. If the user asks about "best player", consider runs scored or wickets taken.
+4. If data is missing or you can't find the answer in the context, politely inform the user.
+5. Provide step-by-step instructions for app features if asked.
+
+User Data Context:
+{{DATA_CONTEXT}}`;
 
 interface Message {
   role: 'user' | 'model';
@@ -32,13 +31,44 @@ interface Message {
 }
 
 export function ChatBot() {
+  const { user } = useFirebase();
   const [isOpen, setIsOpen] = useState(false);
   const [messages, setMessages] = useState<Message[]>([
-    { role: 'model', text: 'Hi! I am your Cricket Scoring assistant. How can I help you today?' }
+    { role: 'model', text: 'Hi! I am your Cricket Scoring assistant. I can help you with app features or answer questions about your tournaments and players. How can I help you today?' }
   ]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
+
+  // Data states
+  const [players, setPlayers] = useState<any[]>([]);
+  const [teams, setTeams] = useState<any[]>([]);
+  const [tournaments, setTournaments] = useState<any[]>([]);
+  const [matches, setMatches] = useState<any[]>([]);
+
+  useEffect(() => {
+    if (!user || !isOpen) return;
+
+    const unsubPlayers = onSnapshot(query(collection(db, 'players'), where('ownerId', '==', user.uid)), (snap) => {
+      setPlayers(snap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+    });
+    const unsubTeams = onSnapshot(query(collection(db, 'teams'), where('ownerId', '==', user.uid)), (snap) => {
+      setTeams(snap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+    });
+    const unsubTournaments = onSnapshot(query(collection(db, 'tournaments'), where('ownerId', '==', user.uid)), (snap) => {
+      setTournaments(snap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+    });
+    const unsubMatches = onSnapshot(query(collection(db, 'matches'), where('ownerId', '==', user.uid)), (snap) => {
+      setMatches(snap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+    });
+
+    return () => {
+      unsubPlayers();
+      unsubTeams();
+      unsubTournaments();
+      unsubMatches();
+    };
+  }, [user, isOpen]);
 
   useEffect(() => {
     if (scrollRef.current) {
@@ -55,19 +85,60 @@ export function ChatBot() {
     setIsLoading(true);
 
     try {
+      // Prepare data context
+      const tournamentStats: Record<string, any> = {};
+      tournaments.forEach(t => {
+        const tName = t.name || 'Unknown Tournament';
+        tournamentStats[tName] = {
+          status: t.status,
+          playerPerformance: {}
+        };
+        
+        matches.filter(m => m.tournamentId === t.id).forEach(m => {
+          if (m.playerStats) {
+            Object.entries(m.playerStats).forEach(([pid, pstat]: [string, any]) => {
+              const pName = pstat.name || 'Unknown Player';
+              if (!tournamentStats[tName].playerPerformance[pName]) {
+                tournamentStats[tName].playerPerformance[pName] = { runs: 0, wickets: 0, matches: 0 };
+              }
+              tournamentStats[tName].playerPerformance[pName].runs += pstat.runs || 0;
+              tournamentStats[tName].playerPerformance[pName].wickets += pstat.wickets || 0;
+              tournamentStats[tName].playerPerformance[pName].matches += 1;
+            });
+          }
+        });
+      });
+
+      const dataContext = {
+        tournaments: tournamentStats,
+        teams: teams.map(t => ({ name: t.name, stats: t.stats })),
+        players: players.map(p => ({ 
+          name: p.name, 
+          team: teams.find(t => t.id === p.teamId)?.name || 'Unknown',
+          careerStats: p.stats 
+        })),
+        recentMatches: matches.slice(0, 5).map(m => ({
+          teams: `${m.team1Name} vs ${m.team2Name}`,
+          result: m.result,
+          score: `${m.score1}/${m.wickets1} - ${m.score2}/${m.wickets2}`,
+          tournament: tournaments.find(t => t.id === m.tournamentId)?.name || 'None'
+        }))
+      };
+
+      const systemInstruction = SYSTEM_INSTRUCTION.replace('{{DATA_CONTEXT}}', JSON.stringify(dataContext, null, 2));
+
       const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-      const model = ai.models.generateContent({
+      const response = await ai.models.generateContent({
         model: "gemini-3-flash-preview",
         contents: messages.concat({ role: 'user', text: userMessage }).map(m => ({
           role: m.role,
           parts: [{ text: m.text }]
         })),
         config: {
-          systemInstruction: SYSTEM_INSTRUCTION,
+          systemInstruction: systemInstruction,
         }
       });
 
-      const response = await model;
       const text = response.text || "I'm sorry, I couldn't process that request.";
       
       setMessages(prev => [...prev, { role: 'model', text }]);
@@ -92,8 +163,13 @@ export function ChatBot() {
             <Card className="flex-1 flex flex-col shadow-2xl border-primary/20 rounded-[2rem] overflow-hidden">
               <CardHeader className="bg-primary text-primary-foreground p-4 flex flex-row items-center justify-between">
                 <div className="flex items-center gap-2">
-                  <Bot size={24} />
-                  <CardTitle className="text-lg font-black tracking-tight">Cricket Assistant</CardTitle>
+                  <div className="w-8 h-8 rounded-full bg-white/20 flex items-center justify-center">
+                    <Sparkles size={18} className="text-white animate-pulse" />
+                  </div>
+                  <div>
+                    <CardTitle className="text-lg font-black tracking-tight leading-none">Cricket AI</CardTitle>
+                    <div className="text-[10px] font-bold opacity-70 uppercase tracking-widest mt-1">Powered by Gemini</div>
+                  </div>
                 </div>
                 <Button 
                   variant="ghost" 

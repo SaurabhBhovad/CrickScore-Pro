@@ -67,8 +67,10 @@ export default function Teams() {
   const [newPlayerPhoto, setNewPlayerPhoto] = useState<string | undefined>(undefined);
 
   useEffect(() => {
-    const teamsRef = collection(db, 'teams');
-    const unsubscribeTeams = onSnapshot(teamsRef, (snapshot) => {
+    if (!user) return;
+
+    const teamsQuery = query(collection(db, 'teams'), where('ownerId', '==', user.uid));
+    const unsubscribeTeams = onSnapshot(teamsQuery, (snapshot) => {
       const teamsData = snapshot.docs.map(doc => ({
         id: doc.id,
         ...doc.data()
@@ -80,8 +82,8 @@ export default function Teams() {
       setLoading(false);
     });
 
-    const playersRef = collection(db, 'players');
-    const unsubscribePlayers = onSnapshot(playersRef, (snapshot) => {
+    const playersQuery = query(collection(db, 'players'), where('ownerId', '==', user.uid));
+    const unsubscribePlayers = onSnapshot(playersQuery, (snapshot) => {
       const counts: Record<string, number> = {};
       snapshot.docs.forEach(doc => {
         const teamId = doc.data().teamId;
@@ -96,7 +98,7 @@ export default function Teams() {
       unsubscribeTeams();
       unsubscribePlayers();
     };
-  }, []);
+  }, [user]);
 
   const handleLogoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];

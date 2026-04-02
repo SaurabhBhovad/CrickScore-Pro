@@ -6,7 +6,7 @@ import { Label } from '@/src/components/ui/Label';
 import { Input } from '@/src/components/ui/Input';
 import { Select } from '@/src/components/ui/Select';
 import { Badge } from '@/src/components/ui/Badge';
-import { User, Plus, Search, Filter, TrendingUp, Award, Activity, Loader2, Trash2 } from 'lucide-react';
+import { User, Plus, Search, Filter, TrendingUp, Award, Activity, Loader2, Trash2, LayoutGrid, List, ArrowUpDown, ChevronUp, ChevronDown } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { db, collection, onSnapshot, query, where, handleFirestoreError, OperationType, deleteDoc, doc } from '../firebase';
 import { useFirebase } from '../components/FirebaseProvider';
@@ -39,20 +39,21 @@ export default function Players() {
   const [teams, setTeams] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
   const [playerToDelete, setPlayerToDelete] = useState<Player | null>(null);
+  const [viewMode, setViewMode] = useState<'grid' | 'table'>('table');
+  const [sortConfig, setSortConfig] = useState<{ key: string; direction: 'asc' | 'desc' | null }>({ key: 'name', direction: 'asc' });
 
   useEffect(() => {
     if (!user) return;
 
     // Fetch teams first to map team names
-    const unsubTeams = onSnapshot(collection(db, 'teams'), (snapshot) => {
+    const teamsQuery = query(collection(db, 'teams'), where('ownerId', '==', user.uid));
+    const unsubTeams = onSnapshot(teamsQuery, (snapshot) => {
       const teamMap: Record<string, string> = {};
       const utIds: string[] = [];
       snapshot.docs.forEach(doc => {
         const data = doc.data();
         teamMap[doc.id] = data.name;
-        if (data.ownerId === user.uid) {
-          utIds.push(doc.id);
-        }
+        utIds.push(doc.id);
       });
       setTeams(teamMap);
       setUserTeamIds(utIds);
@@ -97,6 +98,49 @@ export default function Players() {
     }
   };
 
+  const handleSort = (key: string) => {
+    let direction: 'asc' | 'desc' | null = 'asc';
+    if (sortConfig.key === key && sortConfig.direction === 'asc') {
+      direction = 'desc';
+    } else if (sortConfig.key === key && sortConfig.direction === 'desc') {
+      direction = null;
+    }
+    setSortConfig({ key, direction });
+  };
+
+  const sortedPlayers = [...filteredPlayers].sort((a, b) => {
+    if (!sortConfig.key || !sortConfig.direction) return 0;
+
+    let aValue: any;
+    let bValue: any;
+
+    if (sortConfig.key.startsWith('stats.')) {
+      const statKey = sortConfig.key.split('.')[1];
+      aValue = (a.stats as any)?.[statKey] || 0;
+      bValue = (b.stats as any)?.[statKey] || 0;
+    } else if (sortConfig.key === 'team') {
+      aValue = teams[a.teamId] || '';
+      bValue = teams[b.teamId] || '';
+    } else {
+      aValue = (a as any)[sortConfig.key] || '';
+      bValue = (b as any)[sortConfig.key] || '';
+    }
+
+    if (typeof aValue === 'string') aValue = aValue.toLowerCase();
+    if (typeof bValue === 'string') bValue = bValue.toLowerCase();
+
+    if (aValue < bValue) return sortConfig.direction === 'asc' ? -1 : 1;
+    if (aValue > bValue) return sortConfig.direction === 'asc' ? 1 : -1;
+    return 0;
+  });
+
+  const SortIcon = ({ column }: { column: string }) => {
+    if (sortConfig.key !== column) return <ArrowUpDown size={14} className="ml-1 opacity-50" />;
+    if (sortConfig.direction === 'asc') return <ChevronUp size={14} className="ml-1 text-primary" />;
+    if (sortConfig.direction === 'desc') return <ChevronDown size={14} className="ml-1 text-primary" />;
+    return <ArrowUpDown size={14} className="ml-1 opacity-50" />;
+  };
+
   return (
     <div className="space-y-8">
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
@@ -123,6 +167,24 @@ export default function Players() {
           />
         </div>
         <div className="flex gap-2 w-full sm:w-auto">
+          <div className="flex items-center bg-background border rounded-lg p-1 shadow-sm">
+            <Button 
+              variant={viewMode === 'grid' ? 'secondary' : 'ghost'} 
+              size="icon" 
+              className="h-9 w-9"
+              onClick={() => setViewMode('grid')}
+            >
+              <LayoutGrid size={18} />
+            </Button>
+            <Button 
+              variant={viewMode === 'table' ? 'secondary' : 'ghost'} 
+              size="icon" 
+              className="h-9 w-9"
+              onClick={() => setViewMode('table')}
+            >
+              <List size={18} />
+            </Button>
+          </div>
           <Button variant="outline" className="gap-2 h-11">
             <Filter size={18} />
             Filters
@@ -134,15 +196,15 @@ export default function Players() {
         <div className="flex justify-center py-20">
           <Loader2 className="animate-spin text-primary" size={48} />
         </div>
-      ) : filteredPlayers.length === 0 ? (
+      ) : sortedPlayers.length === 0 ? (
         <div className="text-center py-20 bg-muted/20 rounded-2xl border-2 border-dashed">
           <User className="mx-auto text-muted-foreground mb-4" size={48} />
           <h3 className="text-xl font-semibold">No players found</h3>
           <p className="text-muted-foreground">Try adjusting your search or add players through team creation.</p>
         </div>
-      ) : (
+      ) : viewMode === 'grid' ? (
         <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-          {filteredPlayers.map((player) => (
+          {sortedPlayers.map((player) => (
             <Card key={player.id} className="group hover:shadow-xl transition-all duration-300 border-muted/60 overflow-hidden relative">
               <div className="h-2 bg-primary/10 group-hover:bg-primary transition-colors" />
               {user?.uid === player.ownerId && (
@@ -210,6 +272,90 @@ export default function Players() {
               </CardContent>
             </Card>
           ))}
+        </div>
+      ) : (
+        <div className="bg-card border rounded-xl shadow-sm overflow-hidden overflow-x-auto">
+          <table className="w-full text-sm text-left">
+            <thead className="bg-muted/50 text-muted-foreground font-bold uppercase text-[10px] tracking-wider">
+              <tr>
+                <th className="px-6 py-4 cursor-pointer hover:text-primary transition-colors" onClick={() => handleSort('name')}>
+                  <div className="flex items-center">Player <SortIcon column="name" /></div>
+                </th>
+                <th className="px-6 py-4 cursor-pointer hover:text-primary transition-colors" onClick={() => handleSort('team')}>
+                  <div className="flex items-center">Team <SortIcon column="team" /></div>
+                </th>
+                <th className="px-6 py-4 cursor-pointer hover:text-primary transition-colors" onClick={() => handleSort('role')}>
+                  <div className="flex items-center">Role <SortIcon column="role" /></div>
+                </th>
+                <th className="px-6 py-4 cursor-pointer hover:text-primary transition-colors text-center" onClick={() => handleSort('stats.matches')}>
+                  <div className="flex items-center justify-center">Mat <SortIcon column="stats.matches" /></div>
+                </th>
+                <th className="px-6 py-4 cursor-pointer hover:text-primary transition-colors text-center" onClick={() => handleSort('stats.runs')}>
+                  <div className="flex items-center justify-center">Runs <SortIcon column="stats.runs" /></div>
+                </th>
+                <th className="px-6 py-4 cursor-pointer hover:text-primary transition-colors text-center" onClick={() => handleSort('stats.wickets')}>
+                  <div className="flex items-center justify-center">Wkts <SortIcon column="stats.wickets" /></div>
+                </th>
+                <th className="px-6 py-4 cursor-pointer hover:text-primary transition-colors text-center" onClick={() => handleSort('stats.strikeRate')}>
+                  <div className="flex items-center justify-center">SR <SortIcon column="stats.strikeRate" /></div>
+                </th>
+                <th className="px-6 py-4 cursor-pointer hover:text-primary transition-colors text-center" onClick={() => handleSort('stats.average')}>
+                  <div className="flex items-center justify-center">Avg <SortIcon column="stats.average" /></div>
+                </th>
+                <th className="px-6 py-4 text-right">Actions</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y">
+              {sortedPlayers.map((player) => (
+                <tr key={player.id} className="hover:bg-muted/30 transition-colors group">
+                  <td className="px-6 py-4">
+                    <div className="flex items-center gap-3">
+                      <div className="w-8 h-8 rounded-full bg-secondary flex items-center justify-center font-bold text-xs overflow-hidden">
+                        {player.photo ? (
+                          <img src={player.photo} alt={player.name} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                        ) : (
+                          player.name.charAt(0)
+                        )}
+                      </div>
+                      <Link to={`/players/${player.id}`} className="font-bold hover:text-primary transition-colors">
+                        {player.name}
+                      </Link>
+                    </div>
+                  </td>
+                  <td className="px-6 py-4 text-muted-foreground font-medium">
+                    {teams[player.teamId] || 'Free Agent'}
+                  </td>
+                  <td className="px-6 py-4">
+                    <Badge variant="outline" className="font-normal text-[10px]">{player.role}</Badge>
+                  </td>
+                  <td className="px-6 py-4 text-center font-mono">{player.stats?.matches || 0}</td>
+                  <td className="px-6 py-4 text-center font-bold">{player.stats?.runs || 0}</td>
+                  <td className="px-6 py-4 text-center font-bold">{player.stats?.wickets || 0}</td>
+                  <td className="px-6 py-4 text-center text-muted-foreground">{player.stats?.strikeRate || 0}</td>
+                  <td className="px-6 py-4 text-center text-muted-foreground">{player.stats?.average || 0}</td>
+                  <td className="px-6 py-4 text-right">
+                    <div className="flex items-center justify-end gap-2">
+                      <Link to={`/players/${player.id}`}>
+                        <Button variant="ghost" size="icon" className="h-8 w-8">
+                          <Activity size={14} className="text-primary" />
+                        </Button>
+                      </Link>
+                      {user?.uid === player.ownerId && (
+                        <Button 
+                          variant="ghost" 
+                          size="icon" 
+                          className="h-8 w-8 text-destructive hover:bg-destructive/10"
+                          onClick={() => setPlayerToDelete(player)}
+                        >
+                          <Trash2 size={14} />
+                        </Button>
+                      )}
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       )}
 

@@ -50,28 +50,61 @@ export default function Dashboard() {
   const [userTeamIds, setUserTeamIds] = useState<string[]>([]);
   const [teams, setTeams] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
+  const [matchActivityData, setMatchActivityData] = useState([
+    { name: 'Mon', matches: 0 },
+    { name: 'Tue', matches: 0 },
+    { name: 'Wed', matches: 0 },
+    { name: 'Thu', matches: 0 },
+    { name: 'Fri', matches: 0 },
+    { name: 'Sat', matches: 0 },
+    { name: 'Sun', matches: 0 },
+  ]);
 
   useEffect(() => {
     if (!user) return;
 
-    const unsubMatches = onSnapshot(collection(db, 'matches'), (snapshot) => {
+    const matchesQuery = query(collection(db, 'matches'), where('ownerId', '==', user.uid));
+    const unsubMatches = onSnapshot(matchesQuery, (snapshot) => {
       const matches = snapshot.docs.map(doc => doc.data());
       setCounts(prev => ({
         ...prev,
         matches: snapshot.size,
         active: matches.filter(m => m.status === 'ongoing').length
       }));
+
+      // Calculate activity data
+      const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+      const countsByDay: Record<string, number> = { 'Mon': 0, 'Tue': 0, 'Wed': 0, 'Thu': 0, 'Fri': 0, 'Sat': 0, 'Sun': 0 };
+      
+      matches.forEach(m => {
+        if (m.date) {
+          const date = new Date(m.date);
+          const dayName = days[date.getDay()];
+          if (countsByDay[dayName] !== undefined) {
+            countsByDay[dayName]++;
+          }
+        }
+      });
+
+      setMatchActivityData([
+        { name: 'Mon', matches: countsByDay['Mon'] },
+        { name: 'Tue', matches: countsByDay['Tue'] },
+        { name: 'Wed', matches: countsByDay['Wed'] },
+        { name: 'Thu', matches: countsByDay['Thu'] },
+        { name: 'Fri', matches: countsByDay['Fri'] },
+        { name: 'Sat', matches: countsByDay['Sat'] },
+        { name: 'Sun', matches: countsByDay['Sun'] },
+      ]);
     }, (error) => handleFirestoreError(error, OperationType.GET, 'matches'));
 
-    const unsubTeams = onSnapshot(collection(db, 'teams'), (snapshot) => {
+    const teamsQuery = query(collection(db, 'teams'), where('ownerId', '==', user.uid));
+    const unsubTeams = onSnapshot(teamsQuery, (snapshot) => {
       const teamMap: Record<string, string> = {};
       const utIds: string[] = [];
       snapshot.docs.forEach(doc => {
         const data = doc.data();
         teamMap[doc.id] = data.name;
-        if (data.ownerId === user.uid) {
-          utIds.push(doc.id);
-        }
+        utIds.push(doc.id);
       });
       setTeams(teamMap);
       setUserTeamIds(utIds);
@@ -88,7 +121,7 @@ export default function Dashboard() {
       setUserPlayers(playersData);
     }, (error) => handleFirestoreError(error, OperationType.GET, 'players'));
 
-    const recentQuery = query(collection(db, 'matches'), orderBy('date', 'desc'), limit(3));
+    const recentQuery = query(collection(db, 'matches'), where('ownerId', '==', user.uid), orderBy('date', 'desc'), limit(3));
     const unsubRecent = onSnapshot(recentQuery, (snapshot) => {
       setRecentMatches(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
       setLoading(false);
@@ -194,9 +227,9 @@ export default function Dashboard() {
                 </Button>
               </CardHeader>
               <CardContent className="p-8 pt-10">
-                <div className="h-[350px] w-full">
+                <div className="h-[350px] w-full min-h-[350px]">
                   <ResponsiveContainer width="100%" height="100%">
-                    <AreaChart data={matchData}>
+                    <AreaChart data={matchActivityData} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
                       <defs>
                         <linearGradient id="colorMatches" x1="0" y1="0" x2="0" y2="1">
                           <stop offset="5%" stopColor="hsl(var(--primary))" stopOpacity={0.3}/>

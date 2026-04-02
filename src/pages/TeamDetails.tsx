@@ -80,7 +80,7 @@ export default function TeamDetails() {
       setLoading(false);
     });
 
-    const playersQuery = query(collection(db, 'players'), where('teamId', '==', id));
+    const playersQuery = query(collection(db, 'players'), where('teamId', '==', id), where('ownerId', '==', user.uid));
     const unsubscribePlayers = onSnapshot(playersQuery, (snapshot) => {
       const playersData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Player));
       setPlayers(playersData);
@@ -88,8 +88,8 @@ export default function TeamDetails() {
       handleFirestoreError(error, OperationType.GET, 'players');
     });
 
-    const matchesQuery1 = query(collection(db, 'matches'), where('team1Id', '==', id));
-    const matchesQuery2 = query(collection(db, 'matches'), where('team2Id', '==', id));
+    const matchesQuery1 = query(collection(db, 'matches'), where('team1Id', '==', id), where('ownerId', '==', user.uid));
+    const matchesQuery2 = query(collection(db, 'matches'), where('team2Id', '==', id), where('ownerId', '==', user.uid));
     
     const unsubscribeMatches1 = onSnapshot(matchesQuery1, (snapshot) => {
       const matchesData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Match));

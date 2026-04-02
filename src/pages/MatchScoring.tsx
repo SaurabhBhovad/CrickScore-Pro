@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/src/components/ui/Card';
 import { Button } from '@/src/components/ui/Button';
@@ -7,10 +7,12 @@ import { Dialog } from '@/src/components/ui/Dialog';
 import { Label } from '@/src/components/ui/Label';
 import { Input } from '@/src/components/ui/Input';
 import { Select } from '@/src/components/ui/Select';
-import { Trophy, Undo, History, Settings, User, Activity, Info, ChevronRight, Share2, MoreVertical, Zap, Target, Loader2, PlusCircle } from 'lucide-react';
+import { Trophy, Undo, History, Settings, User, Activity, Info, ChevronRight, Share2, MoreVertical, Zap, Target, Loader2, PlusCircle, Award } from 'lucide-react';
 import { cn } from '@/src/lib/utils';
 import { db, doc, onSnapshot, updateDoc, handleFirestoreError, OperationType, collection, query, where, increment, writeBatch, setDoc } from '../firebase';
+import { useFirebase } from '../components/FirebaseProvider';
 import { toast } from 'sonner';
+import Scorecard from '../components/Scorecard';
 
 interface Match {
   id: string;
@@ -48,6 +50,7 @@ interface Match {
       wickets: number;
       runsConceded: number;
       ballsBowled: number;
+      isOut?: boolean;
     }
   };
   statsUpdated?: boolean;
@@ -62,6 +65,7 @@ interface Player {
 }
 
 export default function MatchScoring() {
+  const { user } = useFirebase();
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const [match, setMatch] = useState<Match | null>(null);
@@ -69,6 +73,12 @@ export default function MatchScoring() {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isUpdating, setIsUpdating] = useState(false);
   const [isDetailedBallOpen, setIsDetailedBallOpen] = useState(false);
+  const [isInitialSelectionOpen, setIsInitialSelectionOpen] = useState(false);
+  const [initialSelectionData, setInitialSelectionData] = useState({
+    strikerId: '',
+    nonStrikerId: '',
+    bowlerId: ''
+  });
   const [detailedBallData, setDetailedBallData] = useState({
     runs: 0,
     extraType: 'none' as 'none' | 'wide' | 'noball' | 'bye' | 'legbye',
@@ -79,6 +89,8 @@ export default function MatchScoring() {
     nonStrikerId: '',
     bowlerId: ''
   });
+
+  const [isScorecardOpen, setIsScorecardOpen] = useState(false);
 
   useEffect(() => {
     if (match) {
@@ -140,9 +152,10 @@ export default function MatchScoring() {
   const [battingPlayers, setBattingPlayers] = useState<Player[]>([]);
   const [bowlingPlayers, setBowlingPlayers] = useState<Player[]>([]);
   const [selectorType, setSelectorType] = useState<'striker' | 'nonStriker' | 'bowler'>('striker');
+  const lastInningsRef = useRef<number | null>(null);
 
   useEffect(() => {
-    if (!match) return;
+    if (!match || !user) return;
 
     // Clear old players to prevent stale data during transition
     setBattingPlayers([]);
@@ -151,11 +164,13 @@ export default function MatchScoring() {
     const battingTeamId = match.currentInnings === 1 ? match.team1Id : match.team2Id;
     const bowlingTeamId = match.currentInnings === 1 ? match.team2Id : match.team1Id;
 
-    const unsubBatting = onSnapshot(query(collection(db, 'players'), where('teamId', '==', battingTeamId)), (snapshot) => {
+    const battingPlayersQuery = query(collection(db, 'players'), where('teamId', '==', battingTeamId), where('ownerId', '==', user.uid));
+    const unsubBatting = onSnapshot(battingPlayersQuery, (snapshot) => {
       setBattingPlayers(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Player)));
     });
 
-    const unsubBowling = onSnapshot(query(collection(db, 'players'), where('teamId', '==', bowlingTeamId)), (snapshot) => {
+    const bowlingPlayersQuery = query(collection(db, 'players'), where('teamId', '==', bowlingTeamId), where('ownerId', '==', user.uid));
+    const unsubBowling = onSnapshot(bowlingPlayersQuery, (snapshot) => {
       setBowlingPlayers(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Player)));
     });
 
@@ -163,19 +178,23 @@ export default function MatchScoring() {
       unsubBatting();
       unsubBowling();
     };
-  }, [match?.team1Id, match?.team2Id, match?.currentInnings]);
+  }, [match?.team1Id, match?.team2Id, match?.currentInnings, user]);
 
   useEffect(() => {
     if (!match || match.status === 'completed') return;
 
     // Initial player selection if not set
-    if (!match.strikerId || !match.nonStrikerId) {
-      setSelectorType('striker');
-      setIsBatsmanSelectorOpen(true);
-    } else if (!match.bowlerId) {
-      setIsBowlerSelectorOpen(true);
+    if (!match.strikerId || !match.nonStrikerId || !match.bowlerId) {
+      // Only open if we have players loaded
+      if (battingPlayers.length > 0 && bowlingPlayers.length > 0) {
+        if (lastInningsRef.current !== match.currentInnings) {
+          setInitialSelectionData({ strikerId: '', nonStrikerId: '', bowlerId: '' });
+          lastInningsRef.current = match.currentInnings;
+        }
+        setIsInitialSelectionOpen(true);
+      }
     }
-  }, [match?.id, match?.status, match?.strikerId, match?.nonStrikerId, match?.bowlerId]);
+  }, [match?.id, match?.status, match?.strikerId, match?.nonStrikerId, match?.bowlerId, match?.currentInnings, battingPlayers.length, bowlingPlayers.length]);
 
   useEffect(() => {
     if (!id) return;
@@ -243,7 +262,7 @@ export default function MatchScoring() {
       // Ensure striker and bowler are in playerStats and have all fields
       if (match.strikerId) {
         if (!updates.playerStats[match.strikerId]) {
-          updates.playerStats[match.strikerId] = { name: match.strikerName || 'Unknown', runs: 0, balls: 0, wickets: 0, runsConceded: 0, ballsBowled: 0 };
+          updates.playerStats[match.strikerId] = { name: match.strikerName || 'Unknown', runs: 0, balls: 0, wickets: 0, runsConceded: 0, ballsBowled: 0, isOut: false };
         } else {
           const s = updates.playerStats[match.strikerId];
           s.runs = s.runs || 0;
@@ -251,12 +270,13 @@ export default function MatchScoring() {
           s.wickets = s.wickets || 0;
           s.runsConceded = s.runsConceded || 0;
           s.ballsBowled = s.ballsBowled || 0;
+          s.isOut = s.isOut || false;
         }
       }
       
       if (match.bowlerId) {
         if (!updates.playerStats[match.bowlerId]) {
-          updates.playerStats[match.bowlerId] = { name: match.bowlerName || 'Unknown', runs: 0, balls: 0, wickets: 0, runsConceded: 0, ballsBowled: 0 };
+          updates.playerStats[match.bowlerId] = { name: match.bowlerName || 'Unknown', runs: 0, balls: 0, wickets: 0, runsConceded: 0, ballsBowled: 0, isOut: false };
         } else {
           const b = updates.playerStats[match.bowlerId];
           b.runs = b.runs || 0;
@@ -264,6 +284,7 @@ export default function MatchScoring() {
           b.wickets = b.wickets || 0;
           b.runsConceded = b.runsConceded || 0;
           b.ballsBowled = b.ballsBowled || 0;
+          b.isOut = b.isOut || false;
         }
       }
 
@@ -281,6 +302,10 @@ export default function MatchScoring() {
         // Batsman faces a ball if it's not a Wide
         if (extraType !== 'wide') {
           s.balls += 1;
+        }
+
+        if (isWicket) {
+          s.isOut = true;
         }
       }
 
@@ -337,8 +362,10 @@ export default function MatchScoring() {
         wicketsAfterUpdate = updates.wickets1;
         scoreAfterUpdate = updates.score1;
 
+        const isAllOut = wicketsAfterUpdate >= 10 || (battingPlayers.length > 0 && wicketsAfterUpdate >= battingPlayers.length - 1);
+
         // Auto finish first innings
-        if (ballsAfterUpdate >= match.overs * 6 || wicketsAfterUpdate >= 10) {
+        if (ballsAfterUpdate >= match.overs * 6 || isAllOut) {
           updates.currentInnings = 2;
           updates.recentBalls = [];
           updates.strikerId = null;
@@ -347,6 +374,10 @@ export default function MatchScoring() {
           updates.nonStrikerName = null;
           updates.bowlerId = null;
           updates.bowlerName = null;
+          
+          if (isAllOut) {
+            toast.error(`${match.team1Name} All Out!`, { duration: 5000 });
+          }
           toast.success('First innings completed automatically!');
         } else {
           // Check for next batsman or bowler
@@ -388,18 +419,25 @@ export default function MatchScoring() {
         wicketsAfterUpdate = updates.wickets2;
         scoreAfterUpdate = updates.score2;
 
+        const isAllOut = wicketsAfterUpdate >= 10 || (battingPlayers.length > 0 && wicketsAfterUpdate >= battingPlayers.length - 1);
+
         // Auto finish match
         const target = match.score1 + 1;
         if (scoreAfterUpdate >= target) {
           updates.status = 'completed';
-          updates.result = `${match.team2Name} won by ${10 - wicketsAfterUpdate} wickets`;
+          const wicketsLeft = battingPlayers.length - wicketsAfterUpdate;
+          updates.result = `${match.team2Name} won by ${wicketsLeft} wickets`;
           toast.success('Match completed!');
           await updateCareerStats({ ...match, ...updates });
-        } else if (ballsAfterUpdate >= match.overs * 6 || wicketsAfterUpdate >= 10) {
+        } else if (ballsAfterUpdate >= match.overs * 6 || isAllOut) {
           updates.status = 'completed';
           updates.result = scoreAfterUpdate === match.score1 
             ? 'Match Tied' 
             : `${match.team1Name} won by ${match.score1 - scoreAfterUpdate} runs`;
+          
+          if (isAllOut) {
+            toast.error(`${match.team2Name} All Out!`, { duration: 5000 });
+          }
           toast.success('Match completed!');
           await updateCareerStats({ ...match, ...updates });
         } else {
@@ -535,10 +573,11 @@ export default function MatchScoring() {
         })));
         toast.success('First innings completed!');
       } else {
+        const wicketsLeft = battingPlayers.length - match.wickets2;
         const result = match.score1 > match.score2 
           ? `${match.team1Name} won by ${match.score1 - match.score2} runs`
           : match.score2 > match.score1
-            ? `${match.team2Name} won by ${10 - match.wickets2} wickets`
+            ? `${match.team2Name} won by ${wicketsLeft} wickets`
             : 'Match Tied';
         
         await updateDoc(matchRef, JSON.parse(JSON.stringify({ status: 'completed', result })));
@@ -576,6 +615,43 @@ export default function MatchScoring() {
       }
 
       await updateDoc(matchRef, JSON.parse(JSON.stringify(updates)));
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `matches/${id}`);
+    }
+  };
+
+  const handleInitialSelectionSubmit = async () => {
+    if (!match || !id) return;
+    const { strikerId, nonStrikerId, bowlerId } = initialSelectionData;
+    
+    if (!strikerId || !nonStrikerId || !bowlerId) {
+      toast.error('Please select all players');
+      return;
+    }
+
+    if (strikerId === nonStrikerId) {
+      toast.error('Striker and Non-Striker must be different');
+      return;
+    }
+
+    try {
+      const matchRef = doc(db, 'matches', id);
+      const striker = battingPlayers.find(p => p.id === strikerId);
+      const nonStriker = battingPlayers.find(p => p.id === nonStrikerId);
+      const bowler = bowlingPlayers.find(p => p.id === bowlerId);
+
+      await updateDoc(matchRef, JSON.parse(JSON.stringify({
+        strikerId,
+        strikerName: striker?.name,
+        nonStrikerId,
+        nonStrikerName: nonStriker?.name,
+        bowlerId,
+        bowlerName: bowler?.name,
+        status: 'ongoing'
+      })));
+      
+      setIsInitialSelectionOpen(false);
+      toast.success('Match started!');
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, `matches/${id}`);
     }
@@ -855,6 +931,68 @@ export default function MatchScoring() {
 
           {/* Dialogs */}
           <Dialog
+            isOpen={isInitialSelectionOpen}
+            onClose={() => {}} // Prevent closing without selection
+            title="Start Innings"
+            description="Select the opening batsmen and the first bowler."
+          >
+            <div className="space-y-6 pt-4">
+              <div className="space-y-4">
+                <div className="space-y-2">
+                  <Label className="text-[10px] font-black uppercase tracking-widest opacity-60">Striker</Label>
+                  <Select 
+                    value={initialSelectionData.strikerId} 
+                    onChange={(e) => setInitialSelectionData(prev => ({ ...prev, strikerId: e.target.value }))}
+                    className="h-12 rounded-xl"
+                  >
+                    <option value="">Select Striker</option>
+                    {battingPlayers
+                      .filter(p => p.id !== initialSelectionData.nonStrikerId)
+                      .map(p => (
+                        <option key={p.id} value={p.id}>{p.name}</option>
+                      ))}
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label className="text-[10px] font-black uppercase tracking-widest opacity-60">Non-Striker</Label>
+                  <Select 
+                    value={initialSelectionData.nonStrikerId} 
+                    onChange={(e) => setInitialSelectionData(prev => ({ ...prev, nonStrikerId: e.target.value }))}
+                    className="h-12 rounded-xl"
+                  >
+                    <option value="">Select Non-Striker</option>
+                    {battingPlayers
+                      .filter(p => p.id !== initialSelectionData.strikerId)
+                      .map(p => (
+                        <option key={p.id} value={p.id}>{p.name}</option>
+                      ))}
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label className="text-[10px] font-black uppercase tracking-widest opacity-60">Opening Bowler</Label>
+                  <Select 
+                    value={initialSelectionData.bowlerId} 
+                    onChange={(e) => setInitialSelectionData(prev => ({ ...prev, bowlerId: e.target.value }))}
+                    className="h-12 rounded-xl"
+                  >
+                    <option value="">Select Bowler</option>
+                    {bowlingPlayers.map(p => (
+                      <option key={p.id} value={p.id}>{p.name}</option>
+                    ))}
+                  </Select>
+                </div>
+              </div>
+
+              <Button 
+                className="w-full h-14 rounded-2xl font-black uppercase tracking-widest shadow-lg shadow-primary/20"
+                onClick={handleInitialSelectionSubmit}
+              >
+                Start Match
+              </Button>
+            </div>
+          </Dialog>
+
+          <Dialog
             isOpen={isDetailedBallOpen}
             onClose={() => setIsDetailedBallOpen(false)}
             title="Detailed Ball Entry"
@@ -1045,53 +1183,84 @@ export default function MatchScoring() {
           </Dialog>
 
           {match.status === 'completed' && (
-            <Card className="rounded-[2.5rem] border-primary/20 bg-primary/5 overflow-hidden">
-              <div className="bg-primary p-8 text-center text-primary-foreground">
-                <Trophy className="mx-auto mb-4" size={64} />
-                <h2 className="text-4xl font-black tracking-tight mb-2">{match.result}</h2>
-                <p className="text-primary-foreground/80 font-bold uppercase tracking-widest text-sm">Match Completed</p>
-              </div>
-              
-              <CardContent className="p-8 space-y-8">
-                <div className="grid grid-cols-2 gap-8">
-                  <div className="space-y-4">
-                    <h3 className="text-xs font-black uppercase tracking-widest text-muted-foreground border-b pb-2">Top Batsmen</h3>
-                    {(Object.values(match.playerStats || {}) as any[])
-                      .sort((a, b) => b.runs - a.runs)
-                      .slice(0, 3)
-                      .map((p, i) => (
-                        <div key={i} className="flex items-center justify-between">
-                          <div className="font-bold">{p.name}</div>
-                          <div className="font-black text-primary">{p.runs} <span className="text-[10px] text-muted-foreground font-bold">({p.balls})</span></div>
-                        </div>
-                      ))
-                    }
+            <div className="space-y-6">
+              <Card className="rounded-[2.5rem] border-primary/20 bg-primary/5 overflow-hidden shadow-2xl">
+                <div className="bg-primary p-10 text-center text-primary-foreground relative overflow-hidden">
+                  <div className="absolute top-0 left-0 w-full h-full opacity-10 pointer-events-none">
+                    <Trophy className="absolute -top-10 -left-10 w-40 h-40" />
+                    <Activity className="absolute -bottom-10 -right-10 w-40 h-40" />
                   </div>
-                  <div className="space-y-4">
-                    <h3 className="text-xs font-black uppercase tracking-widest text-muted-foreground border-b pb-2">Top Bowlers</h3>
-                    {(Object.values(match.playerStats || {}) as any[])
-                      .sort((a, b) => b.wickets - a.wickets || a.runsConceded - b.runsConceded)
-                      .slice(0, 3)
-                      .map((p, i) => (
-                        <div key={i} className="flex items-center justify-between">
-                          <div className="font-bold">{p.name}</div>
-                          <div className="font-black text-secondary-foreground">{p.wickets} <span className="text-[10px] text-muted-foreground font-bold">({p.runsConceded})</span></div>
-                        </div>
-                      ))
-                    }
-                  </div>
+                  <Trophy className="mx-auto mb-6 relative z-10" size={80} />
+                  <h2 className="text-4xl font-black tracking-tight mb-3 relative z-10">{match.result}</h2>
+                  <p className="text-primary-foreground/80 font-black uppercase tracking-[0.2em] text-sm relative z-10">Match Completed</p>
                 </div>
+                
+                <CardContent className="p-8 space-y-8">
+                  <div className="grid grid-cols-2 gap-8">
+                    <div className="space-y-4">
+                      <h3 className="text-[10px] font-black uppercase tracking-widest text-muted-foreground border-b pb-2 flex items-center gap-2">
+                        <Award size={14} className="text-primary" />
+                        Top Batsmen
+                      </h3>
+                      {(Object.values(match.playerStats || {}) as any[])
+                        .sort((a, b) => b.runs - a.runs)
+                        .slice(0, 3)
+                        .map((p, i) => (
+                          <div key={i} className="flex items-center justify-between p-3 rounded-xl bg-muted/20 border border-muted/40">
+                            <div className="font-bold text-sm">{p.name}</div>
+                            <div className="font-black text-primary">{p.runs} <span className="text-[10px] text-muted-foreground font-bold ml-1">({p.balls})</span></div>
+                          </div>
+                        ))
+                      }
+                    </div>
+                    <div className="space-y-4">
+                      <h3 className="text-[10px] font-black uppercase tracking-widest text-muted-foreground border-b pb-2 flex items-center gap-2">
+                        <Activity size={14} className="text-secondary-foreground" />
+                        Top Bowlers
+                      </h3>
+                      {(Object.values(match.playerStats || {}) as any[])
+                        .sort((a, b) => b.wickets - a.wickets || a.runsConceded - b.runsConceded)
+                        .slice(0, 3)
+                        .map((p, i) => (
+                          <div key={i} className="flex items-center justify-between p-3 rounded-xl bg-muted/20 border border-muted/40">
+                            <div className="font-bold text-sm">{p.name}</div>
+                            <div className="font-black text-secondary-foreground">{p.wickets} <span className="text-[10px] text-muted-foreground font-bold ml-1">({p.runsConceded})</span></div>
+                          </div>
+                        ))
+                      }
+                    </div>
+                  </div>
 
-                <div className="pt-6 border-t">
-                  <Button 
-                    className="w-full h-14 rounded-2xl font-black uppercase tracking-widest"
-                    onClick={() => navigate('/')}
-                  >
-                    Back to Dashboard
-                  </Button>
+                  <div className="pt-6 grid grid-cols-2 gap-4">
+                    <Button 
+                      variant="outline"
+                      className="h-14 rounded-2xl font-black uppercase tracking-widest border-primary/20 text-primary hover:bg-primary/5"
+                      onClick={() => setIsScorecardOpen(true)}
+                    >
+                      View Scorecard
+                    </Button>
+                    <Button 
+                      className="h-14 rounded-2xl font-black uppercase tracking-widest shadow-lg shadow-primary/20"
+                      onClick={() => navigate('/')}
+                    >
+                      Back to Dashboard
+                    </Button>
+                  </div>
+                </CardContent>
+              </Card>
+
+              <Dialog
+                isOpen={isScorecardOpen}
+                onClose={() => setIsScorecardOpen(false)}
+                title="Match Scorecard"
+                description="Detailed statistics for all players in this match."
+                className="max-w-4xl"
+              >
+                <div className="py-4">
+                  <Scorecard match={match} />
                 </div>
-              </CardContent>
-            </Card>
+              </Dialog>
+            </div>
           )}
         </div>
 
@@ -1178,7 +1347,7 @@ export default function MatchScoring() {
       >
         <div className="grid grid-cols-1 gap-3 pt-4 max-h-[400px] overflow-y-auto">
           {battingPlayers
-            .filter(p => p.id !== match.strikerId && p.id !== match.nonStrikerId)
+            .filter(p => p.id !== match.strikerId && p.id !== match.nonStrikerId && !match.playerStats?.[p.id]?.isOut)
             .map(player => (
               <Button 
                 key={player.id} 
@@ -1214,8 +1383,19 @@ export default function MatchScoring() {
                       id: playerRef.id,
                       name,
                       teamId: battingTeamId,
+                      ownerId: user.uid,
                       role: 'Batsman',
-                      stats: { matches: 0, runs: 0, balls: 0, wickets: 0, runsConceded: 0, ballsBowled: 0 }
+                      stats: { 
+                        matches: 0, 
+                        runs: 0, 
+                        balls: 0, 
+                        wickets: 0, 
+                        runsConceded: 0, 
+                        ballsBowled: 0,
+                        highestScore: 0,
+                        average: 0,
+                        strikeRate: 0
+                      }
                     });
                     toast.success('Player added!');
                   }
@@ -1273,8 +1453,19 @@ export default function MatchScoring() {
                       id: playerRef.id,
                       name,
                       teamId: bowlingTeamId,
+                      ownerId: user.uid,
                       role: 'Bowler',
-                      stats: { matches: 0, runs: 0, balls: 0, wickets: 0, runsConceded: 0, ballsBowled: 0 }
+                      stats: { 
+                        matches: 0, 
+                        runs: 0, 
+                        balls: 0, 
+                        wickets: 0, 
+                        runsConceded: 0, 
+                        ballsBowled: 0,
+                        highestScore: 0,
+                        average: 0,
+                        strikeRate: 0
+                      }
                     });
                     toast.success('Player added!');
                   }
