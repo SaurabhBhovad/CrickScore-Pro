@@ -54,6 +54,22 @@ interface Match {
     }
   };
   statsUpdated?: boolean;
+  tossWinnerId?: string;
+  tossDecision?: 'bat' | 'bowl';
+  tieBreakerRule?: 'superOver' | 'tossWinner';
+  superOver?: {
+    team1Id: string;
+    team2Id: string;
+    score1: number;
+    wickets1: number;
+    balls1: number;
+    score2: number;
+    wickets2: number;
+    balls2: number;
+    currentInnings: number;
+    status: 'ongoing' | 'completed';
+    result?: string;
+  };
 }
 
 interface Player {
@@ -91,6 +107,7 @@ export default function MatchScoring() {
   });
 
   const [isScorecardOpen, setIsScorecardOpen] = useState(false);
+  const [isSuperOverDialogOpen, setIsSuperOverDialogOpen] = useState(false);
 
   useEffect(() => {
     if (match) {
@@ -430,16 +447,34 @@ export default function MatchScoring() {
           toast.success('Match completed!');
           await updateCareerStats({ ...match, ...updates });
         } else if (ballsAfterUpdate >= match.overs * 6 || isAllOut) {
-          updates.status = 'completed';
-          updates.result = scoreAfterUpdate === match.score1 
-            ? 'Match Tied' 
-            : `${match.team1Name} won by ${match.score1 - scoreAfterUpdate} runs`;
+          if (scoreAfterUpdate === match.score1) {
+            // Match Tied
+            if (match.tieBreakerRule === 'tossWinner' && match.tossWinnerId) {
+              updates.status = 'completed';
+              const winnerName = match.tossWinnerId === match.team1Id ? match.team1Name : match.team2Name;
+              updates.result = `Match Tied - ${winnerName} won (Toss Rule)`;
+              toast.success('Match completed (Toss Rule)!');
+              await updateCareerStats({ ...match, ...updates });
+            } else {
+              // Super Over or default
+              updates.status = 'completed';
+              updates.result = 'Match Tied';
+              toast.success('Match Tied!');
+              if (match.tieBreakerRule === 'superOver') {
+                setIsSuperOverDialogOpen(true);
+              }
+              await updateCareerStats({ ...match, ...updates });
+            }
+          } else {
+            updates.status = 'completed';
+            updates.result = `${match.team1Name} won by ${match.score1 - scoreAfterUpdate} runs`;
+            toast.success('Match completed!');
+            await updateCareerStats({ ...match, ...updates });
+          }
           
           if (isAllOut) {
             toast.error(`${match.team2Name} All Out!`, { duration: 5000 });
           }
-          toast.success('Match completed!');
-          await updateCareerStats({ ...match, ...updates });
         } else {
           // Check for next batsman or bowler
           if (isWicket) {
@@ -574,11 +609,24 @@ export default function MatchScoring() {
         toast.success('First innings completed!');
       } else {
         const wicketsLeft = battingPlayers.length - match.wickets2;
-        const result = match.score1 > match.score2 
-          ? `${match.team1Name} won by ${match.score1 - match.score2} runs`
-          : match.score2 > match.score1
-            ? `${match.team2Name} won by ${wicketsLeft} wickets`
-            : 'Match Tied';
+        let result = '';
+        
+        if (match.score1 > match.score2) {
+          result = `${match.team1Name} won by ${match.score1 - match.score2} runs`;
+        } else if (match.score2 > match.score1) {
+          result = `${match.team2Name} won by ${wicketsLeft} wickets`;
+        } else {
+          // Tie
+          if (match.tieBreakerRule === 'tossWinner' && match.tossWinnerId) {
+            const winnerName = match.tossWinnerId === match.team1Id ? match.team1Name : match.team2Name;
+            result = `Match Tied - ${winnerName} won (Toss Rule)`;
+          } else {
+            result = 'Match Tied';
+            if (match.tieBreakerRule === 'superOver') {
+              setIsSuperOverDialogOpen(true);
+            }
+          }
+        }
         
         await updateDoc(matchRef, JSON.parse(JSON.stringify({ status: 'completed', result })));
         await updateCareerStats(match);
@@ -586,6 +634,93 @@ export default function MatchScoring() {
       }
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, `matches/${id}`);
+    }
+  };
+
+  const startSuperOver = async () => {
+    if (!match || !id) return;
+    try {
+      const matchRef = doc(db, 'matches', id);
+      await updateDoc(matchRef, {
+        superOver: {
+          team1Id: match.team2Id, // Team 2 bats first in Super Over if they batted second in match
+          team2Id: match.team1Id,
+          score1: 0,
+          wickets1: 0,
+          balls1: 0,
+          score2: 0,
+          wickets2: 0,
+          balls2: 0,
+          currentInnings: 1,
+          status: 'ongoing'
+        },
+        strikerId: null,
+        nonStrikerId: null,
+        strikerName: null,
+        nonStrikerName: null,
+        bowlerId: null,
+        bowlerName: null
+      });
+      setIsSuperOverDialogOpen(false);
+      toast.success('Super Over started!');
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `matches/${id}`);
+    }
+  };
+
+  const updateSuperOverScore = async (runs: number, isWicket: boolean = false, extraType: 'wide' | 'noball' | 'bye' | 'legbye' | 'none' = 'none') => {
+    if (!match || !id || !match.superOver || isUpdating) return;
+
+    setIsUpdating(true);
+    try {
+      const matchRef = doc(db, 'matches', id);
+      const isLegalBall = extraType !== 'wide' && extraType !== 'noball';
+      const so = { ...match.superOver };
+
+      if (so.currentInnings === 1) {
+        so.score1 += runs;
+        if (isWicket) so.wickets1 += 1;
+        if (isLegalBall) so.balls1 += 1;
+
+        // Super Over is usually 1 over (6 balls) or 2 wickets
+        if (so.balls1 >= 6 || so.wickets1 >= 2) {
+          so.currentInnings = 2;
+          toast.success('Super Over: First innings completed!');
+        }
+      } else {
+        so.score2 += runs;
+        if (isWicket) so.wickets2 += 1;
+        if (isLegalBall) so.balls2 += 1;
+
+        const target = so.score1 + 1;
+        if (so.score2 >= target) {
+          so.status = 'completed';
+          const winnerName = match.team1Name; // Team 1 was bowling in 2nd innings of Super Over
+          so.result = `${winnerName} won the Super Over`;
+          await updateDoc(matchRef, { 
+            'superOver': so,
+            'result': `${winnerName} won (Super Over)`
+          });
+          toast.success('Super Over completed!');
+        } else if (so.balls2 >= 6 || so.wickets2 >= 2) {
+          so.status = 'completed';
+          const winnerName = match.team2Name;
+          so.result = `${winnerName} won the Super Over`;
+          await updateDoc(matchRef, { 
+            'superOver': so,
+            'result': `${winnerName} won (Super Over)`
+          });
+          toast.success('Super Over completed!');
+        }
+      }
+
+      if (so.status !== 'completed') {
+        await updateDoc(matchRef, { 'superOver': so });
+      }
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `matches/${id}`);
+    } finally {
+      setIsUpdating(false);
     }
   };
 
@@ -716,8 +851,95 @@ export default function MatchScoring() {
               {isFirstInnings ? 'End Innings' : 'Finish Match'}
             </Button>
           )}
+          {match.status === 'completed' && match.result === 'Match Tied' && match.tieBreakerRule === 'superOver' && !match.superOver && (
+            <Button className="rounded-2xl h-12 px-6 font-bold shadow-lg shadow-primary/20" onClick={() => setIsSuperOverDialogOpen(true)}>
+              Start Super Over
+            </Button>
+          )}
         </div>
       </div>
+
+      {/* Super Over Display */}
+      {match.superOver && (
+        <Card className="bg-gradient-to-br from-indigo-600 to-purple-700 text-white border-none shadow-2xl rounded-[2.5rem] overflow-hidden relative">
+          <div className="absolute top-0 right-0 w-64 h-64 bg-white/5 rounded-full -mr-32 -mt-32 blur-3xl pointer-events-none" />
+          <CardContent className="p-8 relative z-10">
+            <div className="flex flex-col md:flex-row justify-between items-center gap-6">
+              <div>
+                <div className="flex items-center gap-2 mb-2 opacity-80">
+                  <Award size={16} className="text-yellow-400 fill-yellow-400" />
+                  <span className="text-xs font-black uppercase tracking-[0.2em]">Super Over</span>
+                </div>
+                <div className="flex items-baseline gap-4">
+                  <span className="text-6xl font-black tracking-tighter leading-none">
+                    {match.superOver.currentInnings === 1 ? match.superOver.score1 : match.superOver.score2}
+                  </span>
+                  <span className="text-3xl font-bold opacity-60">
+                    / {match.superOver.currentInnings === 1 ? match.superOver.wickets1 : match.superOver.wickets2}
+                  </span>
+                </div>
+                <div className="mt-4 flex items-center gap-4">
+                  <div className="space-y-1">
+                    <div className="text-[10px] font-black uppercase tracking-widest opacity-60">Balls</div>
+                    <div className="text-xl font-bold">
+                      {match.superOver.currentInnings === 1 ? match.superOver.balls1 : match.superOver.balls2} / 6
+                    </div>
+                  </div>
+                  <div className="w-px h-8 bg-white/20" />
+                  <div className="space-y-1">
+                    <div className="text-[10px] font-black uppercase tracking-widest opacity-60">Batting</div>
+                    <div className="text-xl font-bold">
+                      {match.superOver.currentInnings === 1 
+                        ? (match.team2Id === match.superOver.team1Id ? match.team2Name : match.team1Name)
+                        : (match.team1Id === match.superOver.team2Id ? match.team1Name : match.team2Name)}
+                    </div>
+                  </div>
+                </div>
+              </div>
+              
+              {match.superOver.status === 'ongoing' && (
+                <div className="grid grid-cols-4 gap-2">
+                  {[0, 1, 2, 4, 6].map(runs => (
+                    <Button 
+                      key={runs} 
+                      className="w-12 h-12 rounded-xl bg-white/10 hover:bg-white/20 border border-white/20 font-black"
+                      onClick={() => updateSuperOverScore(runs)}
+                    >
+                      {runs}
+                    </Button>
+                  ))}
+                  <Button 
+                    variant="destructive"
+                    className="w-12 h-12 rounded-xl font-black"
+                    onClick={() => updateSuperOverScore(0, true)}
+                  >
+                    W
+                  </Button>
+                  <Button 
+                    className="w-12 h-12 rounded-xl bg-yellow-500 hover:bg-yellow-600 text-black font-black"
+                    onClick={() => updateSuperOverScore(1, false, 'wide')}
+                  >
+                    Wd
+                  </Button>
+                  <Button 
+                    className="w-12 h-12 rounded-xl bg-orange-500 hover:bg-orange-600 text-white font-black"
+                    onClick={() => updateSuperOverScore(1, false, 'noball')}
+                  >
+                    Nb
+                  </Button>
+                </div>
+              )}
+
+              {match.superOver.status === 'completed' && (
+                <div className="text-right">
+                  <div className="text-[10px] font-black uppercase tracking-widest opacity-60 mb-1">Result</div>
+                  <div className="text-2xl font-black text-yellow-400">{match.superOver.result}</div>
+                </div>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Scoreboard Section */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
@@ -1476,6 +1698,28 @@ export default function MatchScoring() {
               </Button>
             </div>
           )}
+        </div>
+      </Dialog>
+
+      {/* Super Over Dialog */}
+      <Dialog
+        isOpen={isSuperOverDialogOpen}
+        onClose={() => setIsSuperOverDialogOpen(false)}
+        title="Super Over"
+        description="The match is tied! Would you like to start a Super Over to decide the winner?"
+      >
+        <div className="py-6 space-y-6">
+          <div className="bg-muted/30 p-6 rounded-2xl border border-muted text-center">
+            <Award className="mx-auto text-primary mb-4" size={48} />
+            <h3 className="text-xl font-bold mb-2">Match Tied!</h3>
+            <p className="text-muted-foreground">A Super Over will consist of 1 over (6 balls) per team or 2 wickets, whichever comes first.</p>
+          </div>
+          <div className="flex justify-end gap-3">
+            <Button variant="ghost" onClick={() => setIsSuperOverDialogOpen(false)}>Maybe Later</Button>
+            <Button className="px-8 shadow-md" onClick={startSuperOver}>
+              Start Super Over
+            </Button>
+          </div>
         </div>
       </Dialog>
     </div>

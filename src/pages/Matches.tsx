@@ -33,6 +33,9 @@ interface Match {
   wickets2: number;
   balls2: number;
   playerStats?: any;
+  tossWinnerId?: string;
+  tossDecision?: 'bat' | 'bowl';
+  tieBreakerRule?: 'superOver' | 'tossWinner';
 }
 
 interface Team {
@@ -65,7 +68,8 @@ export default function Matches() {
     matchType: 'T20',
     date: new Date().toISOString().slice(0, 16),
     tossWinnerId: '',
-    tossDecision: 'bat' as 'bat' | 'bowl'
+    tossDecision: 'bat' as 'bat' | 'bowl',
+    tieBreakerRule: 'superOver' as 'superOver' | 'tossWinner'
   });
 
   const [selectedMatchForScorecard, setSelectedMatchForScorecard] = useState<Match | null>(null);
@@ -159,6 +163,7 @@ export default function Matches() {
         originalTeam2Id: newMatch.team2Id,
         tossWinnerId: newMatch.tossWinnerId || null,
         tossDecision: newMatch.tossDecision,
+        tieBreakerRule: newMatch.tieBreakerRule,
         date: newMatch.date,
         status: 'scheduled',
         tournamentId: newMatch.tournamentId || null,
@@ -430,6 +435,22 @@ export default function Matches() {
                   <option value="bowl">Bowling First</option>
                 </select>
               </div>
+            </div>
+          </div>
+
+          <div className="pt-4 border-t space-y-4">
+            <h3 className="text-sm font-bold uppercase tracking-widest text-muted-foreground">Tie Breaker Rule</h3>
+            <div className="space-y-2">
+              <Label htmlFor="tieBreaker">In case of a Tie</Label>
+              <select 
+                id="tieBreaker" 
+                className="w-full h-11 rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                value={newMatch.tieBreakerRule}
+                onChange={(e) => setNewMatch({...newMatch, tieBreakerRule: e.target.value as 'superOver' | 'tossWinner'})}
+              >
+                <option value="superOver">Super Over</option>
+                <option value="tossWinner">Toss Winner Wins</option>
+              </select>
             </div>
           </div>
 
